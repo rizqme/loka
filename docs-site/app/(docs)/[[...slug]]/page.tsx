@@ -5,7 +5,8 @@ import defaultMdxComponents from "fumadocs-ui/mdx";
 
 export default async function Page(props: { params: Promise<{ slug?: string[] }> }) {
   const params = await props.params;
-  const page = source.getPage(params.slug);
+  const slug = params.slug && params.slug.length > 0 ? params.slug : undefined;
+  const page = source.getPage(slug);
   if (!page) notFound();
 
   const data = page.data as any;
