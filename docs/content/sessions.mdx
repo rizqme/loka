@@ -83,6 +83,78 @@ await loka.destroySession(session.id);
 
 
 
+## Port forwarding
+
+Expose VM ports on your local machine. Ports can be declared at session creation or added on-demand to a running session.
+
+
+
+```python
+# Declare ports at creation
+session = client.create_session(
+    image="python:3.12-slim",
+    ports=[{"local_port": 8080, "remote_port": 5000}],
+)
+
+# Add a port forward to a running session
+client.port_forward(session.id, 8080, 5000)
+```
+
+
+```typescript
+// Declare ports at creation
+const session = await loka.createSession({
+    image: 'python:3.12-slim',
+    ports: [{ local_port: 8080, remote_port: 5000 }],
+});
+
+// Add a port forward to a running session
+await session.portForward(8080, 5000);
+```
+
+
+
+CLI equivalent:
+
+```bash
+loka session create --image python:3.12-slim --port 8080:5000
+loka session port-forward <id> 8080:5000
+loka session ports <id>
+```
+
+## Local file mounting
+
+Mount a local directory into a running session via a tunnel. Changes on the host are reflected inside the VM.
+
+```bash
+loka session mount <id> ./project /workspace
+loka session mount <id> ~/data /data --read-only
+```
+
+## Storage mount sync
+
+Synchronise data between a VM mount path and its backing cloud storage bucket.
+
+
+
+```python
+client.sync_mount(session.id, "/data", direction="push")
+```
+
+
+```typescript
+await loka.syncMount(session.id, { mount_path: '/data', direction: 'push' });
+```
+
+
+
+CLI equivalent:
+
+```bash
+loka session sync <id> /data --direction push   # VM → bucket
+loka session sync <id> /data --direction pull   # bucket → VM
+```
+
 ## Execution modes
 
 Each session runs in a mode that controls what commands can do.

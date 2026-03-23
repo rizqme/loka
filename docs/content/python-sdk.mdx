@@ -106,6 +106,41 @@ client.reject_execution(execution.id, reason="Not allowed to curl")
 client.approve_execution(execution.id, add_to_whitelist=True)
 ```
 
+## Port forwarding
+
+```python
+# Declare ports at session creation
+session = client.create_session(
+    image="python:3.12-slim",
+    ports=[{"local_port": 8080, "remote_port": 5000}],
+)
+
+# Or forward a port on-demand
+client.port_forward(session.id, 8080, 5000)
+```
+
+## Local file mounting
+
+```python
+# Mount a local directory into the session (via tunnel)
+client.mount(session.id, "./project", "/workspace")
+client.mount(session.id, "~/data", "/data", read_only=True)
+```
+
+## Storage mounts
+
+```python
+from loka import StorageMount
+
+# S3 mount with credentials
+mount = StorageMount.s3("bucket", "/data", access_key_id="AKIA...", secret_access_key="...")
+session = client.create_session(image="python:3.12-slim", mounts=[mount])
+
+# Sync a mount to/from its backing bucket
+client.sync_mount(session.id, "/data", direction="push")   # VM → bucket
+client.sync_mount(session.id, "/data", direction="pull")   # bucket → VM
+```
+
 ## Images
 
 ```python

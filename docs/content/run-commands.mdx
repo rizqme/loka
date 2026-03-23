@@ -137,5 +137,30 @@ execution.cancel();
 
 
 
+### 6. Run a command with port forwarding
+
+Create a session with a forwarded port and start a web server inside the VM. The server is reachable at `localhost:8080` on your machine.
+
+
+
+```python
+session = client.create_session(
+    image="python:3.12-slim",
+    ports=[{"local_port": 8080, "remote_port": 5000}],
+)
+client.run_and_wait(session.id, "python3 -m http.server 5000")
+```
+
+
+```typescript
+const session = await loka.createSession({
+    image: 'python:3.12-slim',
+    ports: [{ local_port: 8080, remote_port: 5000 }],
+});
+await loka.runCommand(session.id, 'python3 -m http.server 5000');
+```
+
+
+
 ## Next steps
 

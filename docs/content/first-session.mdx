@@ -112,3 +112,7 @@ await loka.destroySession(session.id);
 
 ## Next steps
 
+- **Port forwarding** -- expose a VM port on your machine with `--port 8080:5000` at creation or `loka session port-forward` on-demand. See [Sessions](/sessions) for details.
+- **Local file mounting** -- mount a host directory into the VM with `loka session mount`.
+- **Storage mounts** -- attach S3/GCS buckets and sync data with `loka session sync`.
+

@@ -85,12 +85,29 @@ loka deploy apply dev.yml
 ```bash
 loka session create --image python:3.12-slim --mode execute
 loka session create --image ubuntu:22.04 --mode ask --name my-session
+loka session create --image python:3.12-slim --port 8080:5000 --port 3001:3001
+loka session create --image python:3.12-slim \
+  --mount s3://bucket@/data?access_key_id=AKIA...&secret_access_key=...
 loka session list
 loka session get <id>
 loka session destroy <id>
 loka session pause <id>
 loka session resume <id>
 loka session mode <id> ask
+
+# Port forwarding
+loka session port-forward <id> 8080:5000
+loka session port-forward <id> 8080:5000 3001:3001
+loka session ports <id>                    # List port mappings
+
+# Local file mounting (tunnel)
+loka session mount <id> ./project /workspace
+loka session mount <id> ~/data /data --read-only
+
+# Storage mount sync
+loka session sync <id> /data --direction push          # VM → bucket
+loka session sync <id> /data --direction pull          # bucket → VM
+loka session sync <id> /data -d push --prefix results/ --dry-run
 ```
 
 ## Commands

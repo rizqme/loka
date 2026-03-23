@@ -106,6 +106,44 @@ await loka.rejectExecution(execution.id, { reason: 'Not allowed to curl' });
 await loka.approveExecution(execution.id, { addToWhitelist: true });
 ```
 
+## Port forwarding
+
+```typescript
+// Declare ports at session creation
+const session = await loka.createSession({
+    image: 'python:3.12-slim',
+    ports: [{ local_port: 8080, remote_port: 5000 }],
+});
+
+// Or forward a port on-demand
+await session.portForward(8080, 5000);
+```
+
+## Local file mounting
+
+```typescript
+// Mount a local directory into the session (via tunnel)
+await loka.mount(session.id, './project', '/workspace');
+await loka.mount(session.id, '~/data', '/data', { readOnly: true });
+```
+
+## Storage mounts
+
+```typescript
+import { StorageMount } from '@vypr-ai/loka-sdk';
+
+// S3 mount with credentials
+const mount = StorageMount.s3('bucket', '/data', {
+    accessKeyId: 'AKIA...',
+    secretAccessKey: '...',
+});
+const session = await loka.createSession({ image: 'python:3.12-slim', mounts: [mount] });
+
+// Sync a mount to/from its backing bucket
+await loka.syncMount(session.id, { mount_path: '/data', direction: 'push' }); // VM → bucket
+await loka.syncMount(session.id, { mount_path: '/data', direction: 'pull' }); // bucket → VM
+```
+
 ## Images
 
 ```typescript
