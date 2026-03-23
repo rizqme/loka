@@ -152,6 +152,7 @@ func main() {
 		newUseCmd(),
 		newSessionCmd(),
 		newExecCmd(),
+		newShellCmd(),
 		newCheckpointCmd(),
 		newWorkerCmd(),
 		newProviderCmd(),

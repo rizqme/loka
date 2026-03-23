@@ -65,6 +65,10 @@ service ControlService {
   // ─── Port Forward ────────────────────────────────────────
   // Bidirectional stream for tunneling TCP connections to a session VM.
   rpc PortForward(stream PortForwardMessage) returns (stream PortForwardMessage);
+
+  // ─── Interactive Shell ──────────────────────────────────
+  // Bidirectional stream for an interactive terminal session inside a VM.
+  rpc Shell(stream ShellMessage) returns (stream ShellMessage);
 }
 
 // ─── Session messages ──────────────────────────────────────
@@ -371,4 +375,43 @@ message PortForwardClose {
 message PortForwardError {
   uint32 connection_id = 1;
   string message       = 2;
+}
+
+// ─── Interactive shell messages ─────────────────────────────
+
+message ShellMessage {
+  string session_id = 1;
+  oneof payload {
+    ShellInit init       = 2;  // CLI → CP: start shell.
+    ShellInput input     = 3;  // CLI → CP: stdin data.
+    ShellOutput output   = 4;  // CP → CLI: stdout/stderr data.
+    ShellResize resize   = 5;  // CLI → CP: terminal window resize.
+    ShellExit exit       = 6;  // CP → CLI: shell process exited.
+  }
+}
+
+message ShellInit {
+  string command = 1;         // Shell command (default: /bin/bash).
+  uint32 rows    = 2;         // Initial terminal rows.
+  uint32 cols    = 3;         // Initial terminal columns.
+  string workdir = 4;         // Working directory.
+  map<string, string> env = 5; // Environment variables.
+}
+
+message ShellInput {
+  bytes data = 1;             // Raw stdin bytes from the terminal.
+}
+
+message ShellOutput {
+  bytes data     = 1;         // Raw stdout/stderr bytes.
+  bool is_stderr = 2;
+}
+
+message ShellResize {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message ShellExit {
+  int32 exit_code = 1;
 }

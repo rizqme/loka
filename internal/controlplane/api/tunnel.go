@@ -203,5 +203,107 @@ func (pf *portForwardRelay) relay() error {
 	}
 }
 
+// ── Interactive Shell ────────────────────────────────────
+
+// Shell handles an interactive terminal session inside a VM.
+// stdin/stdout are streamed bidirectionally over the gRPC stream.
+func (s *GRPCServer) Shell(stream pb.ControlService_ShellServer) error {
+	// First message must be ShellInit.
+	msg, err := stream.Recv()
+	if err != nil {
+		return fmt.Errorf("receive init: %w", err)
+	}
+
+	init := msg.GetInit()
+	if init == nil {
+		return fmt.Errorf("first message must be ShellInit")
+	}
+
+	sessionID := msg.SessionId
+	s.logger.Info("shell opened",
+		"session", sessionID,
+		"command", init.Command,
+		"rows", init.Rows,
+		"cols", init.Cols)
+
+	// Verify session.
+	sess, err := s.sm.Get(stream.Context(), sessionID)
+	if err != nil {
+		return fmt.Errorf("session not found: %w", err)
+	}
+
+	// Auto-wake idle sessions.
+	if sess.Status == loka.SessionStatusIdle {
+		_, err = s.sm.Wake(stream.Context(), sessionID)
+		if err != nil {
+			return fmt.Errorf("wake session: %w", err)
+		}
+	} else if sess.Status != loka.SessionStatusRunning {
+		return fmt.Errorf("session is %s, must be running", sess.Status)
+	}
+
+	// Relay between CLI and worker.
+	// In the full implementation, the CP dispatches a shell command to the worker,
+	// and the worker opens a PTY in the VM via the supervisor's vsock connection.
+	// stdin/stdout/resize are relayed through this stream.
+
+	shellRelay := &shellSession{
+		sessionID: sessionID,
+		command:   init.Command,
+		rows:      int(init.Rows),
+		cols:      int(init.Cols),
+		stream:    stream,
+		logger:    s.logger,
+	}
+
+	return shellRelay.relay()
+}
+
+type shellSession struct {
+	sessionID string
+	command   string
+	rows, cols int
+	stream    pb.ControlService_ShellServer
+	logger    *slog.Logger
+}
+
+func (sh *shellSession) relay() error {
+	sh.logger.Info("shell relay started",
+		"session", sh.sessionID,
+		"command", sh.command)
+
+	for {
+		msg, err := sh.stream.Recv()
+		if err == io.EOF {
+			sh.logger.Info("shell closed by client", "session", sh.sessionID)
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("shell recv: %w", err)
+		}
+
+		switch p := msg.Payload.(type) {
+		case *pb.ShellMessage_Input:
+			// In full implementation: relay stdin to the worker's PTY.
+			sh.logger.Debug("shell input", "bytes", len(p.Input.Data))
+
+			// TODO: Send to worker via command channel.
+			// For now, echo back to confirm the stream works.
+			sh.stream.Send(&pb.ShellMessage{
+				SessionId: sh.sessionID,
+				Payload: &pb.ShellMessage_Output{
+					Output: &pb.ShellOutput{Data: p.Input.Data},
+				},
+			})
+
+		case *pb.ShellMessage_Resize:
+			sh.rows = int(p.Resize.Rows)
+			sh.cols = int(p.Resize.Cols)
+			sh.logger.Debug("shell resize", "rows", sh.rows, "cols", sh.cols)
+			// TODO: Send resize signal to worker's PTY.
+		}
+	}
+}
+
 // Ensure sync is used.
 var _ sync.Mutex

@@ -51,6 +51,7 @@ const (
 	ControlService_RemoveWorker_FullMethodName      = "/loka.api.v1.ControlService/RemoveWorker"
 	ControlService_FileTunnel_FullMethodName        = "/loka.api.v1.ControlService/FileTunnel"
 	ControlService_PortForward_FullMethodName       = "/loka.api.v1.ControlService/PortForward"
+	ControlService_Shell_FullMethodName             = "/loka.api.v1.ControlService/Shell"
 )
 
 // ControlServiceClient is the client API for ControlService service.
@@ -95,6 +96,9 @@ type ControlServiceClient interface {
 	// ─── Port Forward ────────────────────────────────────────
 	// Bidirectional stream for tunneling TCP connections to a session VM.
 	PortForward(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[PortForwardMessage, PortForwardMessage], error)
+	// ─── Interactive Shell ──────────────────────────────────
+	// Bidirectional stream for an interactive terminal session inside a VM.
+	Shell(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ShellMessage, ShellMessage], error)
 }
 
 type controlServiceClient struct {
@@ -430,6 +434,19 @@ func (c *controlServiceClient) PortForward(ctx context.Context, opts ...grpc.Cal
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_PortForwardClient = grpc.BidiStreamingClient[PortForwardMessage, PortForwardMessage]
 
+func (c *controlServiceClient) Shell(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ShellMessage, ShellMessage], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[3], ControlService_Shell_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ShellMessage, ShellMessage]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_ShellClient = grpc.BidiStreamingClient[ShellMessage, ShellMessage]
+
 // ControlServiceServer is the server API for ControlService service.
 // All implementations must embed UnimplementedControlServiceServer
 // for forward compatibility.
@@ -472,6 +489,9 @@ type ControlServiceServer interface {
 	// ─── Port Forward ────────────────────────────────────────
 	// Bidirectional stream for tunneling TCP connections to a session VM.
 	PortForward(grpc.BidiStreamingServer[PortForwardMessage, PortForwardMessage]) error
+	// ─── Interactive Shell ──────────────────────────────────
+	// Bidirectional stream for an interactive terminal session inside a VM.
+	Shell(grpc.BidiStreamingServer[ShellMessage, ShellMessage]) error
 	mustEmbedUnimplementedControlServiceServer()
 }
 
@@ -574,6 +594,9 @@ func (UnimplementedControlServiceServer) FileTunnel(grpc.BidiStreamingServer[Fil
 }
 func (UnimplementedControlServiceServer) PortForward(grpc.BidiStreamingServer[PortForwardMessage, PortForwardMessage]) error {
 	return status.Error(codes.Unimplemented, "method PortForward not implemented")
+}
+func (UnimplementedControlServiceServer) Shell(grpc.BidiStreamingServer[ShellMessage, ShellMessage]) error {
+	return status.Error(codes.Unimplemented, "method Shell not implemented")
 }
 func (UnimplementedControlServiceServer) mustEmbedUnimplementedControlServiceServer() {}
 func (UnimplementedControlServiceServer) testEmbeddedByValue()                        {}
@@ -1125,6 +1148,13 @@ func _ControlService_PortForward_Handler(srv interface{}, stream grpc.ServerStre
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ControlService_PortForwardServer = grpc.BidiStreamingServer[PortForwardMessage, PortForwardMessage]
 
+func _ControlService_Shell_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ControlServiceServer).Shell(&grpc.GenericServerStream[ShellMessage, ShellMessage]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_ShellServer = grpc.BidiStreamingServer[ShellMessage, ShellMessage]
+
 // ControlService_ServiceDesc is the grpc.ServiceDesc for ControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1260,6 +1290,12 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "PortForward",
 			Handler:       _ControlService_PortForward_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+		{
+			StreamName:    "Shell",
+			Handler:       _ControlService_Shell_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
 		},

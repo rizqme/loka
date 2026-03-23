@@ -3094,6 +3094,412 @@ func (x *PortForwardError) GetMessage() string {
 	return ""
 }
 
+type ShellMessage struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ShellMessage_Init
+	//	*ShellMessage_Input
+	//	*ShellMessage_Output
+	//	*ShellMessage_Resize
+	//	*ShellMessage_Exit
+	Payload       isShellMessage_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellMessage) Reset() {
+	*x = ShellMessage{}
+	mi := &file_control_proto_msgTypes[53]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellMessage) ProtoMessage() {}
+
+func (x *ShellMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[53]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellMessage.ProtoReflect.Descriptor instead.
+func (*ShellMessage) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{53}
+}
+
+func (x *ShellMessage) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *ShellMessage) GetPayload() isShellMessage_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ShellMessage) GetInit() *ShellInit {
+	if x != nil {
+		if x, ok := x.Payload.(*ShellMessage_Init); ok {
+			return x.Init
+		}
+	}
+	return nil
+}
+
+func (x *ShellMessage) GetInput() *ShellInput {
+	if x != nil {
+		if x, ok := x.Payload.(*ShellMessage_Input); ok {
+			return x.Input
+		}
+	}
+	return nil
+}
+
+func (x *ShellMessage) GetOutput() *ShellOutput {
+	if x != nil {
+		if x, ok := x.Payload.(*ShellMessage_Output); ok {
+			return x.Output
+		}
+	}
+	return nil
+}
+
+func (x *ShellMessage) GetResize() *ShellResize {
+	if x != nil {
+		if x, ok := x.Payload.(*ShellMessage_Resize); ok {
+			return x.Resize
+		}
+	}
+	return nil
+}
+
+func (x *ShellMessage) GetExit() *ShellExit {
+	if x != nil {
+		if x, ok := x.Payload.(*ShellMessage_Exit); ok {
+			return x.Exit
+		}
+	}
+	return nil
+}
+
+type isShellMessage_Payload interface {
+	isShellMessage_Payload()
+}
+
+type ShellMessage_Init struct {
+	Init *ShellInit `protobuf:"bytes,2,opt,name=init,proto3,oneof"` // CLI → CP: start shell.
+}
+
+type ShellMessage_Input struct {
+	Input *ShellInput `protobuf:"bytes,3,opt,name=input,proto3,oneof"` // CLI → CP: stdin data.
+}
+
+type ShellMessage_Output struct {
+	Output *ShellOutput `protobuf:"bytes,4,opt,name=output,proto3,oneof"` // CP → CLI: stdout/stderr data.
+}
+
+type ShellMessage_Resize struct {
+	Resize *ShellResize `protobuf:"bytes,5,opt,name=resize,proto3,oneof"` // CLI → CP: terminal window resize.
+}
+
+type ShellMessage_Exit struct {
+	Exit *ShellExit `protobuf:"bytes,6,opt,name=exit,proto3,oneof"` // CP → CLI: shell process exited.
+}
+
+func (*ShellMessage_Init) isShellMessage_Payload() {}
+
+func (*ShellMessage_Input) isShellMessage_Payload() {}
+
+func (*ShellMessage_Output) isShellMessage_Payload() {}
+
+func (*ShellMessage_Resize) isShellMessage_Payload() {}
+
+func (*ShellMessage_Exit) isShellMessage_Payload() {}
+
+type ShellInit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Command       string                 `protobuf:"bytes,1,opt,name=command,proto3" json:"command,omitempty"`                                                                   // Shell command (default: /bin/bash).
+	Rows          uint32                 `protobuf:"varint,2,opt,name=rows,proto3" json:"rows,omitempty"`                                                                        // Initial terminal rows.
+	Cols          uint32                 `protobuf:"varint,3,opt,name=cols,proto3" json:"cols,omitempty"`                                                                        // Initial terminal columns.
+	Workdir       string                 `protobuf:"bytes,4,opt,name=workdir,proto3" json:"workdir,omitempty"`                                                                   // Working directory.
+	Env           map[string]string      `protobuf:"bytes,5,rep,name=env,proto3" json:"env,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // Environment variables.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellInit) Reset() {
+	*x = ShellInit{}
+	mi := &file_control_proto_msgTypes[54]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellInit) ProtoMessage() {}
+
+func (x *ShellInit) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[54]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellInit.ProtoReflect.Descriptor instead.
+func (*ShellInit) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{54}
+}
+
+func (x *ShellInit) GetCommand() string {
+	if x != nil {
+		return x.Command
+	}
+	return ""
+}
+
+func (x *ShellInit) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *ShellInit) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+func (x *ShellInit) GetWorkdir() string {
+	if x != nil {
+		return x.Workdir
+	}
+	return ""
+}
+
+func (x *ShellInit) GetEnv() map[string]string {
+	if x != nil {
+		return x.Env
+	}
+	return nil
+}
+
+type ShellInput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"` // Raw stdin bytes from the terminal.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellInput) Reset() {
+	*x = ShellInput{}
+	mi := &file_control_proto_msgTypes[55]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellInput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellInput) ProtoMessage() {}
+
+func (x *ShellInput) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[55]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellInput.ProtoReflect.Descriptor instead.
+func (*ShellInput) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{55}
+}
+
+func (x *ShellInput) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+type ShellOutput struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"` // Raw stdout/stderr bytes.
+	IsStderr      bool                   `protobuf:"varint,2,opt,name=is_stderr,json=isStderr,proto3" json:"is_stderr,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellOutput) Reset() {
+	*x = ShellOutput{}
+	mi := &file_control_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellOutput) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellOutput) ProtoMessage() {}
+
+func (x *ShellOutput) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellOutput.ProtoReflect.Descriptor instead.
+func (*ShellOutput) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *ShellOutput) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *ShellOutput) GetIsStderr() bool {
+	if x != nil {
+		return x.IsStderr
+	}
+	return false
+}
+
+type ShellResize struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Rows          uint32                 `protobuf:"varint,1,opt,name=rows,proto3" json:"rows,omitempty"`
+	Cols          uint32                 `protobuf:"varint,2,opt,name=cols,proto3" json:"cols,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellResize) Reset() {
+	*x = ShellResize{}
+	mi := &file_control_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellResize) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellResize) ProtoMessage() {}
+
+func (x *ShellResize) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellResize.ProtoReflect.Descriptor instead.
+func (*ShellResize) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *ShellResize) GetRows() uint32 {
+	if x != nil {
+		return x.Rows
+	}
+	return 0
+}
+
+func (x *ShellResize) GetCols() uint32 {
+	if x != nil {
+		return x.Cols
+	}
+	return 0
+}
+
+type ShellExit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ExitCode      int32                  `protobuf:"varint,1,opt,name=exit_code,json=exitCode,proto3" json:"exit_code,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ShellExit) Reset() {
+	*x = ShellExit{}
+	mi := &file_control_proto_msgTypes[58]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ShellExit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ShellExit) ProtoMessage() {}
+
+func (x *ShellExit) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[58]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ShellExit.ProtoReflect.Descriptor instead.
+func (*ShellExit) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{58}
+}
+
+func (x *ShellExit) GetExitCode() int32 {
+	if x != nil {
+		return x.ExitCode
+	}
+	return 0
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -3314,7 +3720,36 @@ const file_control_proto_rawDesc = "" +
 	"\rconnection_id\x18\x01 \x01(\rR\fconnectionId\"Q\n" +
 	"\x10PortForwardError\x12#\n" +
 	"\rconnection_id\x18\x01 \x01(\rR\fconnectionId\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage2\x95\x13\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"\xad\x02\n" +
+	"\fShellMessage\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12,\n" +
+	"\x04init\x18\x02 \x01(\v2\x16.loka.api.v1.ShellInitH\x00R\x04init\x12/\n" +
+	"\x05input\x18\x03 \x01(\v2\x17.loka.api.v1.ShellInputH\x00R\x05input\x122\n" +
+	"\x06output\x18\x04 \x01(\v2\x18.loka.api.v1.ShellOutputH\x00R\x06output\x122\n" +
+	"\x06resize\x18\x05 \x01(\v2\x18.loka.api.v1.ShellResizeH\x00R\x06resize\x12,\n" +
+	"\x04exit\x18\x06 \x01(\v2\x16.loka.api.v1.ShellExitH\x00R\x04exitB\t\n" +
+	"\apayload\"\xd2\x01\n" +
+	"\tShellInit\x12\x18\n" +
+	"\acommand\x18\x01 \x01(\tR\acommand\x12\x12\n" +
+	"\x04rows\x18\x02 \x01(\rR\x04rows\x12\x12\n" +
+	"\x04cols\x18\x03 \x01(\rR\x04cols\x12\x18\n" +
+	"\aworkdir\x18\x04 \x01(\tR\aworkdir\x121\n" +
+	"\x03env\x18\x05 \x03(\v2\x1f.loka.api.v1.ShellInit.EnvEntryR\x03env\x1a6\n" +
+	"\bEnvEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\" \n" +
+	"\n" +
+	"ShellInput\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\">\n" +
+	"\vShellOutput\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x1b\n" +
+	"\tis_stderr\x18\x02 \x01(\bR\bisStderr\"5\n" +
+	"\vShellResize\x12\x12\n" +
+	"\x04rows\x18\x01 \x01(\rR\x04rows\x12\x12\n" +
+	"\x04cols\x18\x02 \x01(\rR\x04cols\"(\n" +
+	"\tShellExit\x12\x1b\n" +
+	"\texit_code\x18\x01 \x01(\x05R\bexitCode2\xd8\x13\n" +
 	"\x0eControlService\x12H\n" +
 	"\rCreateSession\x12!.loka.api.v1.CreateSessionRequest\x1a\x14.loka.api.v1.Session\x12B\n" +
 	"\n" +
@@ -3349,7 +3784,8 @@ const file_control_proto_rawDesc = "" +
 	"\fRemoveWorker\x12 .loka.api.v1.RemoveWorkerRequest\x1a\x16.google.protobuf.Empty\x12P\n" +
 	"\n" +
 	"FileTunnel\x12\x1e.loka.api.v1.FileTunnelMessage\x1a\x1e.loka.api.v1.FileTunnelMessage(\x010\x01\x12S\n" +
-	"\vPortForward\x12\x1f.loka.api.v1.PortForwardMessage\x1a\x1f.loka.api.v1.PortForwardMessage(\x010\x01B#Z!github.com/vyprai/loka/api/lokav1b\x06proto3"
+	"\vPortForward\x12\x1f.loka.api.v1.PortForwardMessage\x1a\x1f.loka.api.v1.PortForwardMessage(\x010\x01\x12A\n" +
+	"\x05Shell\x12\x19.loka.api.v1.ShellMessage\x1a\x19.loka.api.v1.ShellMessage(\x010\x01B#Z!github.com/vyprai/loka/api/lokav1b\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once
@@ -3363,7 +3799,7 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 56)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 63)
 var file_control_proto_goTypes = []any{
 	(*CreateSessionRequest)(nil),     // 0: loka.api.v1.CreateSessionRequest
 	(*GetSessionRequest)(nil),        // 1: loka.api.v1.GetSessionRequest
@@ -3418,40 +3854,47 @@ var file_control_proto_goTypes = []any{
 	(*PortForwardData)(nil),          // 50: loka.api.v1.PortForwardData
 	(*PortForwardClose)(nil),         // 51: loka.api.v1.PortForwardClose
 	(*PortForwardError)(nil),         // 52: loka.api.v1.PortForwardError
-	nil,                              // 53: loka.api.v1.CreateSessionRequest.LabelsEntry
-	nil,                              // 54: loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
-	nil,                              // 55: loka.api.v1.ValidatePackagesResponse.ResultsEntry
-	(ExecMode)(0),                    // 56: loka.api.v1.ExecMode
-	(SessionStatus)(0),               // 57: loka.api.v1.SessionStatus
-	(*Session)(nil),                  // 58: loka.api.v1.Session
-	(*Command)(nil),                  // 59: loka.api.v1.Command
-	(ExecStatus)(0),                  // 60: loka.api.v1.ExecStatus
-	(*Execution)(nil),                // 61: loka.api.v1.Execution
-	(CheckpointType)(0),              // 62: loka.api.v1.CheckpointType
-	(*Package)(nil),                  // 63: loka.api.v1.Package
-	(*PackageProfile)(nil),           // 64: loka.api.v1.PackageProfile
-	(WorkerStatus)(0),                // 65: loka.api.v1.WorkerStatus
-	(*Worker)(nil),                   // 66: loka.api.v1.Worker
-	(*emptypb.Empty)(nil),            // 67: google.protobuf.Empty
-	(*Checkpoint)(nil),               // 68: loka.api.v1.Checkpoint
-	(*CheckpointDAG)(nil),            // 69: loka.api.v1.CheckpointDAG
+	(*ShellMessage)(nil),             // 53: loka.api.v1.ShellMessage
+	(*ShellInit)(nil),                // 54: loka.api.v1.ShellInit
+	(*ShellInput)(nil),               // 55: loka.api.v1.ShellInput
+	(*ShellOutput)(nil),              // 56: loka.api.v1.ShellOutput
+	(*ShellResize)(nil),              // 57: loka.api.v1.ShellResize
+	(*ShellExit)(nil),                // 58: loka.api.v1.ShellExit
+	nil,                              // 59: loka.api.v1.CreateSessionRequest.LabelsEntry
+	nil,                              // 60: loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
+	nil,                              // 61: loka.api.v1.ValidatePackagesResponse.ResultsEntry
+	nil,                              // 62: loka.api.v1.ShellInit.EnvEntry
+	(ExecMode)(0),                    // 63: loka.api.v1.ExecMode
+	(SessionStatus)(0),               // 64: loka.api.v1.SessionStatus
+	(*Session)(nil),                  // 65: loka.api.v1.Session
+	(*Command)(nil),                  // 66: loka.api.v1.Command
+	(ExecStatus)(0),                  // 67: loka.api.v1.ExecStatus
+	(*Execution)(nil),                // 68: loka.api.v1.Execution
+	(CheckpointType)(0),              // 69: loka.api.v1.CheckpointType
+	(*Package)(nil),                  // 70: loka.api.v1.Package
+	(*PackageProfile)(nil),           // 71: loka.api.v1.PackageProfile
+	(WorkerStatus)(0),                // 72: loka.api.v1.WorkerStatus
+	(*Worker)(nil),                   // 73: loka.api.v1.Worker
+	(*emptypb.Empty)(nil),            // 74: google.protobuf.Empty
+	(*Checkpoint)(nil),               // 75: loka.api.v1.Checkpoint
+	(*CheckpointDAG)(nil),            // 76: loka.api.v1.CheckpointDAG
 }
 var file_control_proto_depIdxs = []int32{
-	56, // 0: loka.api.v1.CreateSessionRequest.mode:type_name -> loka.api.v1.ExecMode
-	53, // 1: loka.api.v1.CreateSessionRequest.labels:type_name -> loka.api.v1.CreateSessionRequest.LabelsEntry
-	54, // 2: loka.api.v1.CreateSessionRequest.worker_labels:type_name -> loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
-	57, // 3: loka.api.v1.ListSessionsRequest.status:type_name -> loka.api.v1.SessionStatus
-	58, // 4: loka.api.v1.ListSessionsResponse.sessions:type_name -> loka.api.v1.Session
-	56, // 5: loka.api.v1.SetSessionModeRequest.mode:type_name -> loka.api.v1.ExecMode
-	59, // 6: loka.api.v1.ExecRequest.commands:type_name -> loka.api.v1.Command
-	60, // 7: loka.api.v1.ListExecutionsRequest.status:type_name -> loka.api.v1.ExecStatus
-	61, // 8: loka.api.v1.ListExecutionsResponse.executions:type_name -> loka.api.v1.Execution
-	62, // 9: loka.api.v1.CreateCheckpointRequest.type:type_name -> loka.api.v1.CheckpointType
-	63, // 10: loka.api.v1.ListPackagesResponse.packages:type_name -> loka.api.v1.Package
-	55, // 11: loka.api.v1.ValidatePackagesResponse.results:type_name -> loka.api.v1.ValidatePackagesResponse.ResultsEntry
-	64, // 12: loka.api.v1.ListProfilesResponse.profiles:type_name -> loka.api.v1.PackageProfile
-	65, // 13: loka.api.v1.ListWorkersRequest.status:type_name -> loka.api.v1.WorkerStatus
-	66, // 14: loka.api.v1.ListWorkersResponse.workers:type_name -> loka.api.v1.Worker
+	63, // 0: loka.api.v1.CreateSessionRequest.mode:type_name -> loka.api.v1.ExecMode
+	59, // 1: loka.api.v1.CreateSessionRequest.labels:type_name -> loka.api.v1.CreateSessionRequest.LabelsEntry
+	60, // 2: loka.api.v1.CreateSessionRequest.worker_labels:type_name -> loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
+	64, // 3: loka.api.v1.ListSessionsRequest.status:type_name -> loka.api.v1.SessionStatus
+	65, // 4: loka.api.v1.ListSessionsResponse.sessions:type_name -> loka.api.v1.Session
+	63, // 5: loka.api.v1.SetSessionModeRequest.mode:type_name -> loka.api.v1.ExecMode
+	66, // 6: loka.api.v1.ExecRequest.commands:type_name -> loka.api.v1.Command
+	67, // 7: loka.api.v1.ListExecutionsRequest.status:type_name -> loka.api.v1.ExecStatus
+	68, // 8: loka.api.v1.ListExecutionsResponse.executions:type_name -> loka.api.v1.Execution
+	69, // 9: loka.api.v1.CreateCheckpointRequest.type:type_name -> loka.api.v1.CheckpointType
+	70, // 10: loka.api.v1.ListPackagesResponse.packages:type_name -> loka.api.v1.Package
+	61, // 11: loka.api.v1.ValidatePackagesResponse.results:type_name -> loka.api.v1.ValidatePackagesResponse.ResultsEntry
+	71, // 12: loka.api.v1.ListProfilesResponse.profiles:type_name -> loka.api.v1.PackageProfile
+	72, // 13: loka.api.v1.ListWorkersRequest.status:type_name -> loka.api.v1.WorkerStatus
+	73, // 14: loka.api.v1.ListWorkersResponse.workers:type_name -> loka.api.v1.Worker
 	37, // 15: loka.api.v1.FileTunnelMessage.init:type_name -> loka.api.v1.TunnelInit
 	38, // 16: loka.api.v1.FileTunnelMessage.read_req:type_name -> loka.api.v1.TunnelReadReq
 	39, // 17: loka.api.v1.FileTunnelMessage.read_resp:type_name -> loka.api.v1.TunnelReadResp
@@ -3467,73 +3910,81 @@ var file_control_proto_depIdxs = []int32{
 	50, // 27: loka.api.v1.PortForwardMessage.data:type_name -> loka.api.v1.PortForwardData
 	51, // 28: loka.api.v1.PortForwardMessage.close:type_name -> loka.api.v1.PortForwardClose
 	52, // 29: loka.api.v1.PortForwardMessage.error:type_name -> loka.api.v1.PortForwardError
-	0,  // 30: loka.api.v1.ControlService.CreateSession:input_type -> loka.api.v1.CreateSessionRequest
-	1,  // 31: loka.api.v1.ControlService.GetSession:input_type -> loka.api.v1.GetSessionRequest
-	2,  // 32: loka.api.v1.ControlService.ListSessions:input_type -> loka.api.v1.ListSessionsRequest
-	4,  // 33: loka.api.v1.ControlService.DestroySession:input_type -> loka.api.v1.DestroySessionRequest
-	5,  // 34: loka.api.v1.ControlService.PauseSession:input_type -> loka.api.v1.PauseSessionRequest
-	6,  // 35: loka.api.v1.ControlService.ResumeSession:input_type -> loka.api.v1.ResumeSessionRequest
-	7,  // 36: loka.api.v1.ControlService.SetSessionMode:input_type -> loka.api.v1.SetSessionModeRequest
-	8,  // 37: loka.api.v1.ControlService.Exec:input_type -> loka.api.v1.ExecRequest
-	9,  // 38: loka.api.v1.ControlService.GetExecution:input_type -> loka.api.v1.GetExecutionRequest
-	10, // 39: loka.api.v1.ControlService.ListExecutions:input_type -> loka.api.v1.ListExecutionsRequest
-	12, // 40: loka.api.v1.ControlService.CancelExecution:input_type -> loka.api.v1.CancelExecutionRequest
-	13, // 41: loka.api.v1.ControlService.StreamExecOutput:input_type -> loka.api.v1.StreamExecOutputRequest
-	15, // 42: loka.api.v1.ControlService.CreateCheckpoint:input_type -> loka.api.v1.CreateCheckpointRequest
-	16, // 43: loka.api.v1.ControlService.GetCheckpoint:input_type -> loka.api.v1.GetCheckpointRequest
-	17, // 44: loka.api.v1.ControlService.ListCheckpoints:input_type -> loka.api.v1.ListCheckpointsRequest
-	18, // 45: loka.api.v1.ControlService.RestoreCheckpoint:input_type -> loka.api.v1.RestoreCheckpointRequest
-	19, // 46: loka.api.v1.ControlService.DeleteCheckpoint:input_type -> loka.api.v1.DeleteCheckpointRequest
-	20, // 47: loka.api.v1.ControlService.InstallPackage:input_type -> loka.api.v1.InstallPackageRequest
-	21, // 48: loka.api.v1.ControlService.ListPackages:input_type -> loka.api.v1.ListPackagesRequest
-	23, // 49: loka.api.v1.ControlService.ValidatePackages:input_type -> loka.api.v1.ValidatePackagesRequest
-	25, // 50: loka.api.v1.ControlService.CreateProfile:input_type -> loka.api.v1.CreateProfileRequest
-	26, // 51: loka.api.v1.ControlService.GetProfile:input_type -> loka.api.v1.GetProfileRequest
-	27, // 52: loka.api.v1.ControlService.ListProfiles:input_type -> loka.api.v1.ListProfilesRequest
-	29, // 53: loka.api.v1.ControlService.UpdateProfile:input_type -> loka.api.v1.UpdateProfileRequest
-	30, // 54: loka.api.v1.ControlService.DeleteProfile:input_type -> loka.api.v1.DeleteProfileRequest
-	31, // 55: loka.api.v1.ControlService.ListWorkers:input_type -> loka.api.v1.ListWorkersRequest
-	33, // 56: loka.api.v1.ControlService.GetWorker:input_type -> loka.api.v1.GetWorkerRequest
-	34, // 57: loka.api.v1.ControlService.DrainWorker:input_type -> loka.api.v1.DrainWorkerRequest
-	35, // 58: loka.api.v1.ControlService.RemoveWorker:input_type -> loka.api.v1.RemoveWorkerRequest
-	36, // 59: loka.api.v1.ControlService.FileTunnel:input_type -> loka.api.v1.FileTunnelMessage
-	48, // 60: loka.api.v1.ControlService.PortForward:input_type -> loka.api.v1.PortForwardMessage
-	58, // 61: loka.api.v1.ControlService.CreateSession:output_type -> loka.api.v1.Session
-	58, // 62: loka.api.v1.ControlService.GetSession:output_type -> loka.api.v1.Session
-	3,  // 63: loka.api.v1.ControlService.ListSessions:output_type -> loka.api.v1.ListSessionsResponse
-	67, // 64: loka.api.v1.ControlService.DestroySession:output_type -> google.protobuf.Empty
-	58, // 65: loka.api.v1.ControlService.PauseSession:output_type -> loka.api.v1.Session
-	58, // 66: loka.api.v1.ControlService.ResumeSession:output_type -> loka.api.v1.Session
-	58, // 67: loka.api.v1.ControlService.SetSessionMode:output_type -> loka.api.v1.Session
-	61, // 68: loka.api.v1.ControlService.Exec:output_type -> loka.api.v1.Execution
-	61, // 69: loka.api.v1.ControlService.GetExecution:output_type -> loka.api.v1.Execution
-	11, // 70: loka.api.v1.ControlService.ListExecutions:output_type -> loka.api.v1.ListExecutionsResponse
-	61, // 71: loka.api.v1.ControlService.CancelExecution:output_type -> loka.api.v1.Execution
-	14, // 72: loka.api.v1.ControlService.StreamExecOutput:output_type -> loka.api.v1.OutputChunk
-	68, // 73: loka.api.v1.ControlService.CreateCheckpoint:output_type -> loka.api.v1.Checkpoint
-	68, // 74: loka.api.v1.ControlService.GetCheckpoint:output_type -> loka.api.v1.Checkpoint
-	69, // 75: loka.api.v1.ControlService.ListCheckpoints:output_type -> loka.api.v1.CheckpointDAG
-	58, // 76: loka.api.v1.ControlService.RestoreCheckpoint:output_type -> loka.api.v1.Session
-	67, // 77: loka.api.v1.ControlService.DeleteCheckpoint:output_type -> google.protobuf.Empty
-	63, // 78: loka.api.v1.ControlService.InstallPackage:output_type -> loka.api.v1.Package
-	22, // 79: loka.api.v1.ControlService.ListPackages:output_type -> loka.api.v1.ListPackagesResponse
-	24, // 80: loka.api.v1.ControlService.ValidatePackages:output_type -> loka.api.v1.ValidatePackagesResponse
-	64, // 81: loka.api.v1.ControlService.CreateProfile:output_type -> loka.api.v1.PackageProfile
-	64, // 82: loka.api.v1.ControlService.GetProfile:output_type -> loka.api.v1.PackageProfile
-	28, // 83: loka.api.v1.ControlService.ListProfiles:output_type -> loka.api.v1.ListProfilesResponse
-	64, // 84: loka.api.v1.ControlService.UpdateProfile:output_type -> loka.api.v1.PackageProfile
-	67, // 85: loka.api.v1.ControlService.DeleteProfile:output_type -> google.protobuf.Empty
-	32, // 86: loka.api.v1.ControlService.ListWorkers:output_type -> loka.api.v1.ListWorkersResponse
-	66, // 87: loka.api.v1.ControlService.GetWorker:output_type -> loka.api.v1.Worker
-	66, // 88: loka.api.v1.ControlService.DrainWorker:output_type -> loka.api.v1.Worker
-	67, // 89: loka.api.v1.ControlService.RemoveWorker:output_type -> google.protobuf.Empty
-	36, // 90: loka.api.v1.ControlService.FileTunnel:output_type -> loka.api.v1.FileTunnelMessage
-	48, // 91: loka.api.v1.ControlService.PortForward:output_type -> loka.api.v1.PortForwardMessage
-	61, // [61:92] is the sub-list for method output_type
-	30, // [30:61] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	54, // 30: loka.api.v1.ShellMessage.init:type_name -> loka.api.v1.ShellInit
+	55, // 31: loka.api.v1.ShellMessage.input:type_name -> loka.api.v1.ShellInput
+	56, // 32: loka.api.v1.ShellMessage.output:type_name -> loka.api.v1.ShellOutput
+	57, // 33: loka.api.v1.ShellMessage.resize:type_name -> loka.api.v1.ShellResize
+	58, // 34: loka.api.v1.ShellMessage.exit:type_name -> loka.api.v1.ShellExit
+	62, // 35: loka.api.v1.ShellInit.env:type_name -> loka.api.v1.ShellInit.EnvEntry
+	0,  // 36: loka.api.v1.ControlService.CreateSession:input_type -> loka.api.v1.CreateSessionRequest
+	1,  // 37: loka.api.v1.ControlService.GetSession:input_type -> loka.api.v1.GetSessionRequest
+	2,  // 38: loka.api.v1.ControlService.ListSessions:input_type -> loka.api.v1.ListSessionsRequest
+	4,  // 39: loka.api.v1.ControlService.DestroySession:input_type -> loka.api.v1.DestroySessionRequest
+	5,  // 40: loka.api.v1.ControlService.PauseSession:input_type -> loka.api.v1.PauseSessionRequest
+	6,  // 41: loka.api.v1.ControlService.ResumeSession:input_type -> loka.api.v1.ResumeSessionRequest
+	7,  // 42: loka.api.v1.ControlService.SetSessionMode:input_type -> loka.api.v1.SetSessionModeRequest
+	8,  // 43: loka.api.v1.ControlService.Exec:input_type -> loka.api.v1.ExecRequest
+	9,  // 44: loka.api.v1.ControlService.GetExecution:input_type -> loka.api.v1.GetExecutionRequest
+	10, // 45: loka.api.v1.ControlService.ListExecutions:input_type -> loka.api.v1.ListExecutionsRequest
+	12, // 46: loka.api.v1.ControlService.CancelExecution:input_type -> loka.api.v1.CancelExecutionRequest
+	13, // 47: loka.api.v1.ControlService.StreamExecOutput:input_type -> loka.api.v1.StreamExecOutputRequest
+	15, // 48: loka.api.v1.ControlService.CreateCheckpoint:input_type -> loka.api.v1.CreateCheckpointRequest
+	16, // 49: loka.api.v1.ControlService.GetCheckpoint:input_type -> loka.api.v1.GetCheckpointRequest
+	17, // 50: loka.api.v1.ControlService.ListCheckpoints:input_type -> loka.api.v1.ListCheckpointsRequest
+	18, // 51: loka.api.v1.ControlService.RestoreCheckpoint:input_type -> loka.api.v1.RestoreCheckpointRequest
+	19, // 52: loka.api.v1.ControlService.DeleteCheckpoint:input_type -> loka.api.v1.DeleteCheckpointRequest
+	20, // 53: loka.api.v1.ControlService.InstallPackage:input_type -> loka.api.v1.InstallPackageRequest
+	21, // 54: loka.api.v1.ControlService.ListPackages:input_type -> loka.api.v1.ListPackagesRequest
+	23, // 55: loka.api.v1.ControlService.ValidatePackages:input_type -> loka.api.v1.ValidatePackagesRequest
+	25, // 56: loka.api.v1.ControlService.CreateProfile:input_type -> loka.api.v1.CreateProfileRequest
+	26, // 57: loka.api.v1.ControlService.GetProfile:input_type -> loka.api.v1.GetProfileRequest
+	27, // 58: loka.api.v1.ControlService.ListProfiles:input_type -> loka.api.v1.ListProfilesRequest
+	29, // 59: loka.api.v1.ControlService.UpdateProfile:input_type -> loka.api.v1.UpdateProfileRequest
+	30, // 60: loka.api.v1.ControlService.DeleteProfile:input_type -> loka.api.v1.DeleteProfileRequest
+	31, // 61: loka.api.v1.ControlService.ListWorkers:input_type -> loka.api.v1.ListWorkersRequest
+	33, // 62: loka.api.v1.ControlService.GetWorker:input_type -> loka.api.v1.GetWorkerRequest
+	34, // 63: loka.api.v1.ControlService.DrainWorker:input_type -> loka.api.v1.DrainWorkerRequest
+	35, // 64: loka.api.v1.ControlService.RemoveWorker:input_type -> loka.api.v1.RemoveWorkerRequest
+	36, // 65: loka.api.v1.ControlService.FileTunnel:input_type -> loka.api.v1.FileTunnelMessage
+	48, // 66: loka.api.v1.ControlService.PortForward:input_type -> loka.api.v1.PortForwardMessage
+	53, // 67: loka.api.v1.ControlService.Shell:input_type -> loka.api.v1.ShellMessage
+	65, // 68: loka.api.v1.ControlService.CreateSession:output_type -> loka.api.v1.Session
+	65, // 69: loka.api.v1.ControlService.GetSession:output_type -> loka.api.v1.Session
+	3,  // 70: loka.api.v1.ControlService.ListSessions:output_type -> loka.api.v1.ListSessionsResponse
+	74, // 71: loka.api.v1.ControlService.DestroySession:output_type -> google.protobuf.Empty
+	65, // 72: loka.api.v1.ControlService.PauseSession:output_type -> loka.api.v1.Session
+	65, // 73: loka.api.v1.ControlService.ResumeSession:output_type -> loka.api.v1.Session
+	65, // 74: loka.api.v1.ControlService.SetSessionMode:output_type -> loka.api.v1.Session
+	68, // 75: loka.api.v1.ControlService.Exec:output_type -> loka.api.v1.Execution
+	68, // 76: loka.api.v1.ControlService.GetExecution:output_type -> loka.api.v1.Execution
+	11, // 77: loka.api.v1.ControlService.ListExecutions:output_type -> loka.api.v1.ListExecutionsResponse
+	68, // 78: loka.api.v1.ControlService.CancelExecution:output_type -> loka.api.v1.Execution
+	14, // 79: loka.api.v1.ControlService.StreamExecOutput:output_type -> loka.api.v1.OutputChunk
+	75, // 80: loka.api.v1.ControlService.CreateCheckpoint:output_type -> loka.api.v1.Checkpoint
+	75, // 81: loka.api.v1.ControlService.GetCheckpoint:output_type -> loka.api.v1.Checkpoint
+	76, // 82: loka.api.v1.ControlService.ListCheckpoints:output_type -> loka.api.v1.CheckpointDAG
+	65, // 83: loka.api.v1.ControlService.RestoreCheckpoint:output_type -> loka.api.v1.Session
+	74, // 84: loka.api.v1.ControlService.DeleteCheckpoint:output_type -> google.protobuf.Empty
+	70, // 85: loka.api.v1.ControlService.InstallPackage:output_type -> loka.api.v1.Package
+	22, // 86: loka.api.v1.ControlService.ListPackages:output_type -> loka.api.v1.ListPackagesResponse
+	24, // 87: loka.api.v1.ControlService.ValidatePackages:output_type -> loka.api.v1.ValidatePackagesResponse
+	71, // 88: loka.api.v1.ControlService.CreateProfile:output_type -> loka.api.v1.PackageProfile
+	71, // 89: loka.api.v1.ControlService.GetProfile:output_type -> loka.api.v1.PackageProfile
+	28, // 90: loka.api.v1.ControlService.ListProfiles:output_type -> loka.api.v1.ListProfilesResponse
+	71, // 91: loka.api.v1.ControlService.UpdateProfile:output_type -> loka.api.v1.PackageProfile
+	74, // 92: loka.api.v1.ControlService.DeleteProfile:output_type -> google.protobuf.Empty
+	32, // 93: loka.api.v1.ControlService.ListWorkers:output_type -> loka.api.v1.ListWorkersResponse
+	73, // 94: loka.api.v1.ControlService.GetWorker:output_type -> loka.api.v1.Worker
+	73, // 95: loka.api.v1.ControlService.DrainWorker:output_type -> loka.api.v1.Worker
+	74, // 96: loka.api.v1.ControlService.RemoveWorker:output_type -> google.protobuf.Empty
+	36, // 97: loka.api.v1.ControlService.FileTunnel:output_type -> loka.api.v1.FileTunnelMessage
+	48, // 98: loka.api.v1.ControlService.PortForward:output_type -> loka.api.v1.PortForwardMessage
+	53, // 99: loka.api.v1.ControlService.Shell:output_type -> loka.api.v1.ShellMessage
+	68, // [68:100] is the sub-list for method output_type
+	36, // [36:68] is the sub-list for method input_type
+	36, // [36:36] is the sub-list for extension type_name
+	36, // [36:36] is the sub-list for extension extendee
+	0,  // [0:36] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -3560,13 +4011,20 @@ func file_control_proto_init() {
 		(*PortForwardMessage_Close)(nil),
 		(*PortForwardMessage_Error)(nil),
 	}
+	file_control_proto_msgTypes[53].OneofWrappers = []any{
+		(*ShellMessage_Init)(nil),
+		(*ShellMessage_Input)(nil),
+		(*ShellMessage_Output)(nil),
+		(*ShellMessage_Resize)(nil),
+		(*ShellMessage_Exit)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   56,
+			NumMessages:   63,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
