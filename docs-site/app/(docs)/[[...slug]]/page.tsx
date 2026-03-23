@@ -23,5 +23,7 @@ export default async function Page(props: { params: Promise<{ slug?: string[] }>
 }
 
 export function generateStaticParams() {
-  return source.generateParams();
+  const params = source.generateParams();
+  // Include the root path for static export
+  return [{ slug: [] }, ...params];
 }
