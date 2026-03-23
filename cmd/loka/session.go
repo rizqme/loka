@@ -1,9 +1,13 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -32,6 +36,8 @@ func newSessionCmd() *cobra.Command {
 		newSessionExposeCmd(),
 		newSessionUnexposeCmd(),
 		newSessionSyncCmd(),
+		newSessionArtifactsCmd(),
+		newSessionDownloadCmd(),
 	)
 	return cmd
 }
@@ -610,5 +616,150 @@ Examples:
 	cmd.Flags().StringVar(&prefix, "prefix", "", "Limit sync to a sub-path within the mount")
 	cmd.Flags().BoolVar(&delete, "delete", false, "Delete files in destination not in source")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without syncing")
+	return cmd
+}
+
+func newSessionArtifactsCmd() *cobra.Command {
+	var checkpoint string
+
+	cmd := &cobra.Command{
+		Use:   "artifacts <session-id>",
+		Short: "List files changed in a session",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			client := newClient()
+			artifacts, err := client.ListArtifacts(cmd.Context(), args[0], checkpoint)
+			if err != nil {
+				return err
+			}
+			if outputFmt == "json" {
+				return printJSON(artifacts)
+			}
+			if len(artifacts) == 0 {
+				fmt.Println("No artifacts.")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "PATH\tTYPE\tSIZE\tHASH")
+			for _, a := range artifacts {
+				fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", a.Path, a.Type, a.Size, a.Hash)
+			}
+			w.Flush()
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "List artifacts from a specific checkpoint")
+	return cmd
+}
+
+func newSessionDownloadCmd() *cobra.Command {
+	var (
+		all        bool
+		checkpoint string
+	)
+
+	cmd := &cobra.Command{
+		Use:   "download <session-id> <vm-path> [local-path]",
+		Short: "Download a file from a session",
+		Long: `Download a single file or all artifacts from a session.
+
+Examples:
+  loka session download <id> /workspace/main.py
+  loka session download <id> /workspace/main.py ./main.py
+  loka session download <id> --all ./output-dir
+  loka session download <id> /workspace/main.py --checkpoint <cp-id>`,
+		Args: cobra.RangeArgs(1, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sessionID := args[0]
+			client := newClient()
+
+			if all {
+				// Download all artifacts as tar and extract.
+				localDir := "."
+				if len(args) >= 2 {
+					localDir = args[1]
+				}
+				if err := os.MkdirAll(localDir, 0o755); err != nil {
+					return fmt.Errorf("create directory: %w", err)
+				}
+
+				query := "?format=tar"
+				if checkpoint != "" {
+					query += "&checkpoint=" + checkpoint
+				}
+				data, err := client.DownloadArtifact(cmd.Context(), sessionID, query)
+				if err != nil {
+					return err
+				}
+
+				// Extract tar archive.
+				tr := tar.NewReader(bytes.NewReader(data))
+				count := 0
+				for {
+					hdr, err := tr.Next()
+					if err == io.EOF {
+						break
+					}
+					if err != nil {
+						return fmt.Errorf("read tar: %w", err)
+					}
+					target := filepath.Join(localDir, filepath.Clean(hdr.Name))
+					if hdr.Typeflag == tar.TypeDir {
+						if err := os.MkdirAll(target, 0o755); err != nil {
+							return err
+						}
+						continue
+					}
+					if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+						return err
+					}
+					f, err := os.Create(target)
+					if err != nil {
+						return err
+					}
+					if _, err := io.Copy(f, tr); err != nil {
+						f.Close()
+						return err
+					}
+					f.Close()
+					count++
+				}
+				fmt.Printf("Extracted %d files to %s\n", count, localDir)
+				return nil
+			}
+
+			// Single file download.
+			if len(args) < 2 {
+				return fmt.Errorf("vm-path is required (or use --all)")
+			}
+			vmPath := args[1]
+			localPath := filepath.Base(vmPath)
+			if len(args) >= 3 {
+				localPath = args[2]
+			}
+
+			query := "?path=" + vmPath
+			if checkpoint != "" {
+				query += "&checkpoint=" + checkpoint
+			}
+			data, err := client.DownloadArtifact(cmd.Context(), sessionID, query)
+			if err != nil {
+				return err
+			}
+
+			if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(localPath, data, 0o644); err != nil {
+				return err
+			}
+			fmt.Printf("Downloaded %s → %s (%d bytes)\n", vmPath, localPath, len(data))
+			return nil
+		},
+	}
+
+	cmd.Flags().BoolVar(&all, "all", false, "Download all artifacts as tar, extract to local dir")
+	cmd.Flags().StringVar(&checkpoint, "checkpoint", "", "Download from a specific checkpoint")
 	return cmd
 }

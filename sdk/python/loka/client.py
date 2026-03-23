@@ -8,7 +8,7 @@ from typing import Any, Generator
 
 import httpx
 
-from loka.types import Session, Execution, CommandResult, Checkpoint, Image, Worker, StreamEvent
+from loka.types import Session, Execution, CommandResult, Checkpoint, Image, Worker, StreamEvent, Artifact
 
 
 class LokaClient:
@@ -325,6 +325,71 @@ class LokaClient:
                 return ex
             time.sleep(interval)
         raise TimeoutError(f"Execution {exec_id} did not complete within {timeout}s")
+
+    # ── Artifacts ────────────────────────────────────────
+
+    def list_artifacts(self, session_id: str, checkpoint_id: str = "") -> list[Artifact]:
+        """List files changed in a session.
+
+        Args:
+            session_id: Session ID.
+            checkpoint_id: Optional checkpoint ID to filter by.
+        """
+        q = f"?checkpoint={checkpoint_id}" if checkpoint_id else ""
+        data = self._get(f"/api/v1/sessions/{session_id}/artifacts{q}")
+        return [self._as(Artifact, a) for a in data.get("artifacts", [])]
+
+    def download_artifact(self, session_id: str, path: str) -> bytes:
+        """Download a single file from a session.
+
+        Args:
+            session_id: Session ID.
+            path: Path of the file inside the VM.
+
+        Returns:
+            Raw file contents as bytes.
+        """
+        resp = self._http.get(
+            f"/api/v1/sessions/{session_id}/artifacts/download",
+            params={"path": path},
+        )
+        if resp.is_error:
+            try:
+                data = resp.json()
+                raise LokaError(data.get("error", f"HTTP {resp.status_code}"), resp.status_code)
+            except (json.JSONDecodeError, ValueError):
+                raise LokaError(f"HTTP {resp.status_code}", resp.status_code)
+        return resp.content
+
+    def download_artifacts(self, session_id: str, local_dir: str, checkpoint_id: str = "") -> None:
+        """Download all artifacts as a tar archive and extract to a local directory.
+
+        Args:
+            session_id: Session ID.
+            local_dir: Local directory to extract files into.
+            checkpoint_id: Optional checkpoint ID.
+        """
+        import tarfile
+        import io as _io
+        import os as _os
+
+        params: dict[str, str] = {"format": "tar"}
+        if checkpoint_id:
+            params["checkpoint"] = checkpoint_id
+        resp = self._http.get(
+            f"/api/v1/sessions/{session_id}/artifacts/download",
+            params=params,
+        )
+        if resp.is_error:
+            try:
+                data = resp.json()
+                raise LokaError(data.get("error", f"HTTP {resp.status_code}"), resp.status_code)
+            except (json.JSONDecodeError, ValueError):
+                raise LokaError(f"HTTP {resp.status_code}", resp.status_code)
+
+        _os.makedirs(local_dir, exist_ok=True)
+        with tarfile.open(fileobj=_io.BytesIO(resp.content), mode="r:*") as tf:
+            tf.extractall(path=local_dir)
 
     # ── Checkpoints ──────────────────────────────────────
 

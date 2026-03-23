@@ -103,6 +103,11 @@ func (s *Server) routes() {
 		r.Delete("/sessions/{id}/checkpoints/{cpId}", s.deleteCheckpoint)
 		r.Get("/sessions/{id}/checkpoints/diff", s.diffCheckpoints)
 
+		// Artifacts
+		r.Get("/sessions/{id}/artifacts", s.listArtifacts)
+		r.Get("/sessions/{id}/artifacts/download", s.downloadArtifact)
+		r.Get("/sessions/{id}/checkpoints/{cpId}/artifacts", s.listCheckpointArtifacts)
+
 		// Storage sync
 		r.Post("/sessions/{id}/sync", s.syncMount)
 

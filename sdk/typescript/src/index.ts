@@ -4,6 +4,7 @@ export type {
   Session, CreateSessionOpts, StorageMount, SyncResult, PortMapping,
   Execution, RunOpts, Command, CommandResult,
   Checkpoint, CheckpointType,
+  Artifact,
   Image, Worker,
   ExecPolicy, ModeExecPolicy,
   NetworkPolicy, NetworkRuleSet, NetworkRule,

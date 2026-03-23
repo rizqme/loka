@@ -759,3 +759,108 @@ func (m *Manager) SyncMount(ctx context.Context, sessionID string, req loka.Sync
 		Direction: string(req.Direction),
 	}, nil
 }
+
+// ListArtifacts returns files changed in a session relative to the base image.
+// If checkpointID is empty, returns the live diff from the worker.
+// If checkpointID is set, returns the diff stored with that checkpoint.
+func (m *Manager) ListArtifacts(ctx context.Context, sessionID, checkpointID string) ([]*loka.Artifact, error) {
+	s, err := m.store.Sessions().Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session not found: %w", err)
+	}
+
+	if checkpointID != "" {
+		// Return artifacts stored with the checkpoint overlay metadata.
+		cp, err := m.store.Checkpoints().Get(ctx, checkpointID)
+		if err != nil {
+			return nil, fmt.Errorf("checkpoint not found: %w", err)
+		}
+		if cp.SessionID != sessionID {
+			return nil, fmt.Errorf("checkpoint %s does not belong to session %s", checkpointID, sessionID)
+		}
+		// In production, read the overlay metadata from the object store
+		// at cp.MetadataPath to reconstruct the artifact list.
+		// For now, return an empty list as a placeholder.
+		return []*loka.Artifact{}, nil
+	}
+
+	// Live diff: ensure the session is running then ask the worker.
+	s, err = m.ensureRunning(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.WorkerID == "" {
+		return nil, fmt.Errorf("session has no assigned worker")
+	}
+
+	// Send list_artifacts command to the worker.
+	m.registry.SendCommand(s.WorkerID, worker.WorkerCommand{
+		ID:   uuid.New().String(),
+		Type: "list_artifacts",
+		Data: map[string]string{"session_id": sessionID},
+	})
+
+	// In production, the worker would respond with the file list via a
+	// report channel. For now, return an empty list as a placeholder.
+	m.logger.Info("list_artifacts dispatched", "session", sessionID, "worker", s.WorkerID)
+	return []*loka.Artifact{}, nil
+}
+
+// DownloadArtifact reads a single file from the session's overlay.
+func (m *Manager) DownloadArtifact(ctx context.Context, sessionID, path string) ([]byte, error) {
+	s, err := m.store.Sessions().Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session not found: %w", err)
+	}
+
+	s, err = m.ensureRunning(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.WorkerID == "" {
+		return nil, fmt.Errorf("session has no assigned worker")
+	}
+
+	// Send read_file command to the worker.
+	m.registry.SendCommand(s.WorkerID, worker.WorkerCommand{
+		ID:   uuid.New().String(),
+		Type: "read_file",
+		Data: map[string]string{"session_id": sessionID, "path": path},
+	})
+
+	// In production, the worker would stream the file content back.
+	// For now, return a placeholder.
+	m.logger.Info("read_file dispatched", "session", sessionID, "path", path, "worker", s.WorkerID)
+	return []byte{}, nil
+}
+
+// DownloadArtifactsTar streams all changed files as a tar archive.
+func (m *Manager) DownloadArtifactsTar(ctx context.Context, sessionID string) ([]byte, error) {
+	s, err := m.store.Sessions().Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session not found: %w", err)
+	}
+
+	s, err = m.ensureRunning(ctx, s)
+	if err != nil {
+		return nil, err
+	}
+
+	if s.WorkerID == "" {
+		return nil, fmt.Errorf("session has no assigned worker")
+	}
+
+	// Send download_artifacts_tar command to the worker.
+	m.registry.SendCommand(s.WorkerID, worker.WorkerCommand{
+		ID:   uuid.New().String(),
+		Type: "download_artifacts_tar",
+		Data: map[string]string{"session_id": sessionID},
+	})
+
+	// In production, the worker would stream the tar archive back.
+	// For now, return a placeholder.
+	m.logger.Info("download_artifacts_tar dispatched", "session", sessionID, "worker", s.WorkerID)
+	return []byte{}, nil
+}

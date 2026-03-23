@@ -294,6 +294,69 @@ func (c *Client) RestoreCheckpoint(ctx context.Context, sessionID, cpID string) 
 	return &s, err
 }
 
+// ─── Artifacts ──────────────────────────────────────────
+
+type Artifact struct {
+	ID           string    `json:"id"`
+	SessionID    string    `json:"session_id"`
+	CheckpointID string   `json:"checkpoint_id,omitempty"`
+	Path         string    `json:"path"`
+	Size         int64     `json:"size"`
+	Hash         string    `json:"hash"`
+	Type         string    `json:"type"`
+	IsDir        bool      `json:"is_dir,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+}
+
+func (c *Client) ListArtifacts(ctx context.Context, sessionID string, checkpointID string) ([]Artifact, error) {
+	path := "/api/v1/sessions/" + sessionID + "/artifacts"
+	if checkpointID != "" {
+		path += "?checkpoint=" + checkpointID
+	}
+	var resp struct {
+		Artifacts []Artifact `json:"artifacts"`
+	}
+	err := c.do(ctx, "GET", path, nil, &resp)
+	return resp.Artifacts, err
+}
+
+func (c *Client) DownloadArtifact(ctx context.Context, sessionID, query string) ([]byte, error) {
+	return c.doRaw(ctx, "GET", "/api/v1/sessions/"+sessionID+"/artifacts/download"+query)
+}
+
+// doRaw performs an HTTP request and returns the raw response body bytes.
+func (c *Client) doRaw(ctx context.Context, method, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 400 {
+		var errResp map[string]string
+		json.NewDecoder(resp.Body).Decode(&errResp)
+		msg := errResp["error"]
+		if msg == "" {
+			msg = fmt.Sprintf("HTTP %d", resp.StatusCode)
+		}
+		return nil, fmt.Errorf("%s", msg)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+	return data, nil
+}
+
 // ─── Raw ────────────────────────────────────────────────
 
 // Raw performs a raw API call for endpoints not covered by typed methods.

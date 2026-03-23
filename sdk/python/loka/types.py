@@ -144,6 +144,20 @@ class StreamEvent:
 
 
 @dataclass
+class Artifact:
+    """A file changed in a session."""
+    id: str = ""
+    session_id: str = ""
+    checkpoint_id: str = ""
+    path: str = ""
+    size: int = 0
+    hash: str = ""
+    type: str = ""
+    is_dir: bool = False
+    created_at: str = ""
+
+
+@dataclass
 class Worker:
     ID: str = ""
     Hostname: str = ""

@@ -1,6 +1,6 @@
 import type {
   Session, CreateSessionOpts, Execution, RunOpts, ExecMode,
-  Checkpoint, CheckpointType, Image, Worker, StreamEvent, SyncResult,
+  Checkpoint, CheckpointType, Image, Worker, StreamEvent, SyncResult, Artifact,
 } from './types';
 
 export interface LokaClientOpts {
@@ -289,6 +289,43 @@ export class LokaClient {
   /** Diff two checkpoints, returning the changes between them. */
   async diffCheckpoints(sessionId: string, cpA: string, cpB: string): Promise<any> {
     return this.get(`/api/v1/sessions/${sessionId}/checkpoints/diff?a=${cpA}&b=${cpB}`);
+  }
+
+  // ── Artifacts ─────────────────────────────────────────
+
+  /** List files changed in a session. */
+  async listArtifacts(sessionId: string, checkpointId?: string): Promise<{ artifacts: Artifact[]; total: number }> {
+    const q = checkpointId ? `?checkpoint=${checkpointId}` : '';
+    return this.get(`/api/v1/sessions/${sessionId}/artifacts${q}`);
+  }
+
+  /** Download a single file from a session as raw binary. */
+  async downloadArtifact(sessionId: string, path: string): Promise<ArrayBuffer> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.timeout);
+
+    const headers: Record<string, string> = {};
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+
+    try {
+      const resp = await fetch(`${this.baseUrl}/api/v1/sessions/${sessionId}/artifacts/download?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers,
+        signal: controller.signal,
+      });
+
+      if (!resp.ok) {
+        let msg = `HTTP ${resp.status}`;
+        try {
+          const data = await resp.json();
+          if (data.error) msg = data.error;
+        } catch {}
+        throw new Error(msg);
+      }
+      return resp.arrayBuffer();
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   // ── Domains / Expose ──────────────────────────────────

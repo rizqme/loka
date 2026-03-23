@@ -84,6 +84,20 @@ export interface SyncResult {
   error?: string;
 }
 
+// ── Artifact ────────────────────────────────────────────
+
+export interface Artifact {
+  id: string;
+  session_id: string;
+  checkpoint_id?: string;
+  path: string;
+  size: number;
+  hash: string;
+  type: string;
+  is_dir?: boolean;
+  created_at: string;
+}
+
 // ── Execution ───────────────────────────────────────────
 
 export interface Command {
