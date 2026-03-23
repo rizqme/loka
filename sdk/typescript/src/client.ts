@@ -97,6 +97,27 @@ export class LokaClient {
     return this.post(`/api/v1/sessions/${id}/resume`, {});
   }
 
+  async idleSession(id: string): Promise<Session> {
+    return this.post(`/api/v1/sessions/${id}/idle`, {});
+  }
+
+  /** Poll getSession until the session is ready, with a configurable timeout. */
+  async waitUntilReady(sessionId: string, opts?: { timeout?: number }): Promise<Session> {
+    const timeout = opts?.timeout ?? 120;
+    const deadline = Date.now() + timeout * 1000;
+    while (true) {
+      const session = await this.getSession(sessionId);
+      if (session.Ready) return session;
+      if (session.Status === 'error') {
+        throw new Error(`Session failed: ${session.StatusMessage || 'unknown error'}`);
+      }
+      if (Date.now() > deadline) {
+        throw new Error(`Session ${sessionId} not ready after ${timeout}s (status: ${session.Status})`);
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+  }
+
   async setMode(sessionId: string, mode: ExecMode): Promise<Session> {
     return this.post(`/api/v1/sessions/${sessionId}/mode`, { mode });
   }
@@ -105,6 +126,11 @@ export class LokaClient {
 
   async run(sessionId: string, opts: RunOpts): Promise<Execution> {
     return this.post(`/api/v1/sessions/${sessionId}/exec`, opts);
+  }
+
+  /** Run multiple commands in parallel within a session. */
+  async runParallel(sessionId: string, commands: Array<{ command: string; args?: string[]; workdir?: string }>): Promise<Execution> {
+    return this.post(`/api/v1/sessions/${sessionId}/exec`, { commands, parallel: true });
   }
 
   /** Shorthand: run a single command and wait for result. */
@@ -258,6 +284,27 @@ export class LokaClient {
 
   async deleteCheckpoint(sessionId: string, checkpointId: string): Promise<void> {
     await this.del(`/api/v1/sessions/${sessionId}/checkpoints/${checkpointId}`);
+  }
+
+  /** Diff two checkpoints, returning the changes between them. */
+  async diffCheckpoints(sessionId: string, cpA: string, cpB: string): Promise<any> {
+    return this.get(`/api/v1/sessions/${sessionId}/checkpoints/diff?a=${cpA}&b=${cpB}`);
+  }
+
+  // ── Domains / Expose ──────────────────────────────────
+
+  async listDomains(): Promise<{ routes: any[]; base_domain: string }> {
+    return this.get('/api/v1/domains');
+  }
+
+  /** Expose a session port on a public subdomain. */
+  async exposeSession(sessionId: string, subdomain: string, remotePort: number): Promise<{ subdomain: string; url: string; port: number }> {
+    return this.post(`/api/v1/sessions/${sessionId}/expose`, { subdomain, remote_port: remotePort });
+  }
+
+  /** Remove a previously exposed subdomain from a session. */
+  async unexposeSession(sessionId: string, subdomain: string): Promise<void> {
+    await this.del(`/api/v1/sessions/${sessionId}/expose/${subdomain}`);
   }
 
   // ── Images ──────────────────────────────────────────

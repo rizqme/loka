@@ -143,6 +143,9 @@ class LokaClient:
             "loka session mount <id> <local-path> <vm-path>"
         )
 
+    def idle_session(self, session_id: str) -> Session:
+        return self._as(Session, self._post(f"/api/v1/sessions/{session_id}/idle"))
+
     def pause_session(self, session_id: str) -> Session:
         return self._as(Session, self._post(f"/api/v1/sessions/{session_id}/pause"))
 
@@ -151,6 +154,34 @@ class LokaClient:
 
     def set_mode(self, session_id: str, mode: str) -> Session:
         return self._as(Session, self._post(f"/api/v1/sessions/{session_id}/mode", {"mode": mode}))
+
+    def expose_session(self, session_id: str, subdomain: str, remote_port: int) -> dict:
+        return self._post(f"/api/v1/sessions/{session_id}/expose", {
+            "subdomain": subdomain,
+            "remote_port": remote_port,
+        })
+
+    def unexpose_session(self, session_id: str, subdomain: str) -> None:
+        self._delete(f"/api/v1/sessions/{session_id}/expose/{subdomain}")
+
+    def wait_until_ready(self, session_id: str, timeout: float = 120) -> Session:
+        """Poll until session is ready or errors out.
+
+        Args:
+            session_id: Session ID.
+            timeout: Max seconds to wait (default 120).
+        """
+        import time as _time
+        deadline = _time.monotonic() + timeout
+        sess = self.get_session(session_id)
+        while not sess.Ready and sess.Status != "error":
+            if _time.monotonic() > deadline:
+                raise TimeoutError(f"session {session_id} not ready after {timeout}s (status: {sess.Status})")
+            _time.sleep(0.5)
+            sess = self.get_session(session_id)
+        if sess.Status == "error":
+            raise RuntimeError(f"session failed: {sess.StatusMessage or 'unknown error'}")
+        return sess
 
     # ── Command Execution ────────────────────────────────
 
@@ -240,8 +271,15 @@ class LokaClient:
                     return
                 event_type = ""
 
+    def list_executions(self, session_id: str) -> list[Execution]:
+        data = self._get(f"/api/v1/sessions/{session_id}/exec")
+        return [self._as_execution(e) for e in data.get("executions", [])]
+
     def get_execution(self, session_id: str, exec_id: str) -> Execution:
         return self._as_execution(self._get(f"/api/v1/sessions/{session_id}/exec/{exec_id}"))
+
+    def cancel_execution(self, session_id: str, exec_id: str) -> Execution:
+        return self._as_execution(self._delete(f"/api/v1/sessions/{session_id}/exec/{exec_id}"))
 
     def approve_execution(self, session_id: str, exec_id: str, scope: str = "once") -> Execution:
         """Approve a pending command.
@@ -304,6 +342,12 @@ class LokaClient:
             f"/api/v1/sessions/{session_id}/checkpoints/{checkpoint_id}/restore",
         ))
 
+    def delete_checkpoint(self, session_id: str, checkpoint_id: str) -> None:
+        self._delete(f"/api/v1/sessions/{session_id}/checkpoints/{checkpoint_id}")
+
+    def diff_checkpoints(self, session_id: str, cp_a: str, cp_b: str) -> dict:
+        return self._get(f"/api/v1/sessions/{session_id}/checkpoints/diff?a={cp_a}&b={cp_b}")
+
     # ── Images ───────────────────────────────────────────
 
     def pull_image(self, reference: str) -> Image:
@@ -312,6 +356,17 @@ class LokaClient:
     def list_images(self) -> list[Image]:
         data = self._get("/api/v1/images")
         return [self._as(Image, i) for i in data.get("images", [])]
+
+    def get_image(self, image_id: str) -> Image:
+        return self._as(Image, self._get(f"/api/v1/images/{image_id}"))
+
+    def delete_image(self, image_id: str) -> None:
+        self._delete(f"/api/v1/images/{image_id}")
+
+    # ── Domains ─────────────────────────────────────────
+
+    def list_domains(self) -> dict:
+        return self._get("/api/v1/domains")
 
     # ── Workers ──────────────────────────────────────────
 
