@@ -67,6 +67,26 @@ class LokaClient:
     def destroy_session(self, session_id: str) -> None:
         self._delete(f"/api/v1/sessions/{session_id}")
 
+    def sync_mount(self, session_id: str, mount_path: str, direction: str = "push",
+                   prefix: str = "", delete: bool = False, dry_run: bool = False) -> dict:
+        """Sync data between a session's storage mount and the object store.
+
+        Args:
+            session_id: Session ID.
+            mount_path: The mount path to sync (e.g. "/data").
+            direction: "push" (VM → bucket) or "pull" (bucket → VM).
+            prefix: Limit sync to a sub-path within the mount.
+            delete: Delete files in destination not in source.
+            dry_run: Preview changes without syncing.
+        """
+        return self._post(f"/api/v1/sessions/{session_id}/sync", {
+            "mount_path": mount_path,
+            "direction": direction,
+            "prefix": prefix,
+            "delete": delete,
+            "dry_run": dry_run,
+        })
+
     def pause_session(self, session_id: str) -> Session:
         return self._as(Session, self._post(f"/api/v1/sessions/{session_id}/pause"))
 

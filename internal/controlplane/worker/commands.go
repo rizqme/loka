@@ -44,3 +44,13 @@ type DenyOnGateData struct {
 	CommandID string
 	Reason    string
 }
+
+// SyncMountData is the payload for syncing a storage mount on a worker.
+type SyncMountData struct {
+	SessionID string
+	MountPath string
+	Direction string // "push" or "pull"
+	Prefix    string
+	Delete    bool
+	DryRun    bool
+}

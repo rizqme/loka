@@ -573,3 +573,42 @@ func (m *Manager) GetExecution(ctx context.Context, id string) (*loka.Execution,
 func (m *Manager) ListExecutions(ctx context.Context, sessionID string, filter store.ExecutionFilter) ([]*loka.Execution, error) {
 	return m.store.Executions().ListBySession(ctx, sessionID, filter)
 }
+
+// SyncMount syncs data between a session's storage mount and the object store.
+// The actual sync is dispatched to the worker running the session's VM.
+func (m *Manager) SyncMount(ctx context.Context, sessionID string, req loka.SyncRequest) (*loka.SyncResult, error) {
+	sess, err := m.store.Sessions().Get(ctx, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("session not found: %w", err)
+	}
+
+	if sess.WorkerID == "" {
+		return nil, fmt.Errorf("session has no assigned worker")
+	}
+
+	// Find the worker and dispatch the sync command.
+	wc, ok := m.registry.Get(sess.WorkerID)
+	if !ok {
+		return nil, fmt.Errorf("worker %s not available", sess.WorkerID)
+	}
+
+	// Send sync command to worker.
+	wc.CmdChan <- worker.WorkerCommand{
+		Type: "sync_mount",
+		Data: worker.SyncMountData{
+			SessionID: sessionID,
+			MountPath: req.MountPath,
+			Direction: string(req.Direction),
+			Prefix:    req.Prefix,
+			Delete:    req.Delete,
+			DryRun:    req.DryRun,
+		},
+	}
+
+	// For now, return a placeholder result.
+	// In production, the worker would report back via the exec/report channel.
+	return &loka.SyncResult{
+		MountPath: req.MountPath,
+		Direction: string(req.Direction),
+	}, nil
+}

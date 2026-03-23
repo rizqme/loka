@@ -1,7 +1,7 @@
 export { LokaClient } from './client';
 export type { LokaClientOpts } from './client';
 export type {
-  Session, CreateSessionOpts, StorageMount,
+  Session, CreateSessionOpts, StorageMount, SyncResult,
   Execution, RunOpts, Command, CommandResult,
   Checkpoint, CheckpointType,
   Image, Worker,

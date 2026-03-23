@@ -24,6 +24,7 @@ func newSessionCmd() *cobra.Command {
 		newSessionPauseCmd(),
 		newSessionResumeCmd(),
 		newSessionModeCmd(),
+		newSessionSyncCmd(),
 	)
 	return cmd
 }
@@ -321,4 +322,85 @@ func printJSON(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+func newSessionSyncCmd() *cobra.Command {
+	var (
+		direction string
+		prefix    string
+		delete    bool
+		dryRun    bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "sync <session-id> <mount-path>",
+		Short: "Sync data between a session mount and object storage",
+		Long: `Push changed files from the VM back to the bucket, or pull latest from the bucket.
+
+Examples:
+  loka session sync <id> /data --direction push        # VM → bucket
+  loka session sync <id> /data --direction pull        # bucket → VM
+  loka session sync <id> /data --direction push --prefix results/
+  loka session sync <id> /data --direction push --delete   # mirror (delete extra files)
+  loka session sync <id> /data --direction push --dry-run  # preview changes`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			sessionID := args[0]
+			mountPath := args[1]
+
+			if direction != "push" && direction != "pull" {
+				return fmt.Errorf("--direction must be 'push' or 'pull'")
+			}
+
+			client := newClient()
+			var result struct {
+				MountPath        string   `json:"mount_path"`
+				Direction        string   `json:"direction"`
+				FilesAdded       int      `json:"files_added"`
+				FilesUpdated     int      `json:"files_updated"`
+				FilesDeleted     int      `json:"files_deleted"`
+				BytesTransferred int64    `json:"bytes_transferred"`
+				Files            []string `json:"files,omitempty"`
+				Error            string   `json:"error,omitempty"`
+			}
+
+			err := client.Raw(cmd.Context(), "POST", "/api/v1/sessions/"+sessionID+"/sync", map[string]any{
+				"mount_path": mountPath,
+				"direction":  direction,
+				"prefix":     prefix,
+				"delete":     delete,
+				"dry_run":    dryRun,
+			}, &result)
+			if err != nil {
+				return err
+			}
+
+			if outputFmt == "json" {
+				return printJSON(result)
+			}
+
+			if dryRun {
+				fmt.Printf("Dry run: %s %s\n", result.Direction, result.MountPath)
+				for _, f := range result.Files {
+					fmt.Printf("  %s\n", f)
+				}
+				return nil
+			}
+
+			fmt.Printf("Synced %s (%s)\n", result.MountPath, result.Direction)
+			fmt.Printf("  Added:   %d\n", result.FilesAdded)
+			fmt.Printf("  Updated: %d\n", result.FilesUpdated)
+			fmt.Printf("  Deleted: %d\n", result.FilesDeleted)
+			if result.BytesTransferred > 0 {
+				fmt.Printf("  Bytes:   %d\n", result.BytesTransferred)
+			}
+			return nil
+		},
+	}
+
+	cmd.Flags().StringVarP(&direction, "direction", "d", "push", "Sync direction: push (VM→bucket) or pull (bucket→VM)")
+	cmd.Flags().StringVar(&prefix, "prefix", "", "Limit sync to a sub-path within the mount")
+	cmd.Flags().BoolVar(&delete, "delete", false, "Delete files in destination not in source")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Preview changes without syncing")
+	return cmd
 }

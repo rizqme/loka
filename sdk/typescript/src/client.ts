@@ -1,6 +1,6 @@
 import type {
   Session, CreateSessionOpts, Execution, RunOpts, ExecMode,
-  Checkpoint, CheckpointType, Image, Worker, StreamEvent,
+  Checkpoint, CheckpointType, Image, Worker, StreamEvent, SyncResult,
 } from './types';
 
 export interface LokaClientOpts {
@@ -37,6 +37,17 @@ export class LokaClient {
 
   async destroySession(id: string): Promise<void> {
     await this.del(`/api/v1/sessions/${id}`);
+  }
+
+  /** Sync data between a session's storage mount and the object store. */
+  async syncMount(sessionId: string, opts: {
+    mount_path: string;
+    direction: 'push' | 'pull';
+    prefix?: string;
+    delete?: boolean;
+    dry_run?: boolean;
+  }): Promise<SyncResult> {
+    return this.post(`/api/v1/sessions/${sessionId}/sync`, opts);
   }
 
   async pauseSession(id: string): Promise<Session> {

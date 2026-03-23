@@ -57,6 +57,19 @@ export interface CreateSessionOpts {
   mounts?: StorageMount[];
 }
 
+// ── Sync ────────────────────────────────────────────────
+
+export interface SyncResult {
+  mount_path: string;
+  direction: string;
+  files_added: number;
+  files_updated: number;
+  files_deleted: number;
+  bytes_transferred: number;
+  files?: string[];
+  error?: string;
+}
+
 // ── Execution ───────────────────────────────────────────
 
 export interface Command {
