@@ -5,9 +5,25 @@ import defaultMdxComponents from "fumadocs-ui/mdx";
 
 export default async function Page(props: { params: Promise<{ slug?: string[] }> }) {
   const params = await props.params;
-  const slug = params.slug && params.slug.length > 0 ? params.slug : undefined;
-  const page = source.getPage(slug);
-  if (!page) notFound();
+  const page = source.getPage(params.slug);
+  if (!page) {
+    // Fallback: try index page explicitly
+    const indexPage = source.getPage(["index"]);
+    if (!params.slug && indexPage) {
+      const data = indexPage.data as any;
+      const MDX = data.body;
+      return (
+        <DocsPage toc={data.toc}>
+          <DocsTitle>{data.title}</DocsTitle>
+          <DocsDescription>{data.description}</DocsDescription>
+          <DocsBody>
+            <MDX components={{ ...defaultMdxComponents }} />
+          </DocsBody>
+        </DocsPage>
+      );
+    }
+    notFound();
+  }
 
   const data = page.data as any;
   const MDX = data.body;
