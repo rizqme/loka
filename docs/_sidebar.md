@@ -31,8 +31,16 @@
   - [Images](api/images.md)
   - [Workers](api/workers.md)
 
+- Deploy
+  - [Local](deploy/local.md)
+  - [AWS](deploy/aws.md)
+  - [GCP](deploy/gcp.md)
+  - [Azure](deploy/azure.md)
+  - [DigitalOcean](deploy/digitalocean.md)
+  - [OVH](deploy/ovh.md)
+  - [Self-Managed](deploy/self-managed.md)
+
 - Infrastructure
   - [Architecture](infra/architecture.md)
-  - [Deployment](ops/deployment.md)
   - [HA Mode](ops/ha-mode.md)
   - [CLI Reference](ops/cli.md)
