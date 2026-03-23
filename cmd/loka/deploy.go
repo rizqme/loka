@@ -170,26 +170,26 @@ func deployLocalMacOS(name string, foreground bool) error {
 	fmt.Printf("Starting LOKA in Lima VM...\n")
 
 	// Kill any existing lokad first.
-	exec.Command(limactl, "shell", "loka", "pkill", "-f", "lokad").Run()
+	exec.Command(limactl, "shell", "loka", "sudo", "pkill", "-f", "lokad").Run()
 
 	if foreground {
 		// Save deployment before blocking.
 		store, _ := loadDeployments()
 		store.Add(Deployment{
 			Name: name, Provider: "local", Endpoint: "https://localhost:6840",
-			Workers: 0, Status: "running", CreatedAt: time.Now(),
+			Workers: 1, Status: "running", CreatedAt: time.Now(),
 			Meta: map[string]string{"runtime": "lima", "insecure": "true"},
 		})
 		store.Active = name
 		saveDeployments(store)
 
-		p := exec.Command(limactl, "shell", "loka", "lokad")
+		p := exec.Command(limactl, "shell", "loka", "sudo", "lokad")
 		p.Stdout = os.Stdout; p.Stderr = os.Stderr; p.Stdin = os.Stdin
 		return p.Run()
 	}
 
-	p := exec.Command(limactl, "shell", "loka", "bash", "-c",
-		"nohup lokad --role controlplane > /tmp/lokad.log 2>&1 &")
+	p := exec.Command(limactl, "shell", "loka", "sudo", "bash", "-c",
+		"nohup lokad > /tmp/lokad.log 2>&1 &")
 	if err := p.Run(); err != nil {
 		return fmt.Errorf("failed to start lokad in Lima: %w", err)
 	}
@@ -281,7 +281,7 @@ func newDeployDownCmd() *cobra.Command {
 					// Stop lokad inside Lima, then stop the VM.
 					limactl, _ := exec.LookPath("limactl")
 					if limactl != "" {
-						exec.Command(limactl, "shell", "loka", "pkill", "-f", "lokad").Run()
+						exec.Command(limactl, "shell", "loka", "sudo", "pkill", "-f", "lokad").Run()
 						exec.Command(limactl, "stop", "loka").Run()
 						fmt.Printf("LOKA %q stopped (Lima VM stopped)\n", name)
 					}

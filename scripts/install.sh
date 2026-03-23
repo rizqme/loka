@@ -163,6 +163,11 @@ install_firecracker() {
   info "Downloading Linux kernel..."
   $SUDO curl -fsSL "$kernel_url" -o "${kernel_dir}/vmlinux"
   ok "kernel → ${kernel_dir}/vmlinux"
+
+  # Also symlink to default dev path used by lokad.
+  local dev_kernel_dir="/tmp/loka-data/artifacts/kernel"
+  $SUDO mkdir -p "$dev_kernel_dir"
+  $SUDO ln -sf "${kernel_dir}/vmlinux" "$dev_kernel_dir/vmlinux" 2>/dev/null || true
 }
 
 # ── Install Linux dependencies ───────────────────────────
