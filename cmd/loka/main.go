@@ -31,6 +31,8 @@ func main() {
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format: table, json")
 
 	rootCmd.AddCommand(
+		newStartCmd(),
+		newStopCmd(),
 		newVersionCmd(),
 		newDeployCmd(),
 		newSessionCmd(),
