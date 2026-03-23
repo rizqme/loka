@@ -128,21 +128,63 @@ func (m *Manager) Create(ctx context.Context, opts CreateOpts) (*loka.Session, e
 		}
 
 		if imageReady || s.ImageRef == "" || m.images == nil {
-			// Image cached or no image specified — go straight to running.
+			// Image cached — go straight to running.
 			s.Status = loka.SessionStatusRunning
 			s.Ready = true
-			s.StatusMessage = ""
 		} else {
 			// Image needs pulling — go to provisioning.
+			// The pull happens asynchronously; MarkReady is called when done.
 			s.Status = loka.SessionStatusProvisioning
 			s.StatusMessage = "pulling image"
+
+			// Async: pull image, then mark session running.
+			go func() {
+				pullCtx := context.Background()
+				m.logger.Info("pulling image for session", "session", s.ID, "image", s.ImageRef)
+
+				m.UpdateStatusMessage(pullCtx, s.ID, "pulling image")
+				img, err := m.images.Pull(pullCtx, s.ImageRef)
+				if err != nil {
+					m.logger.Error("image pull failed", "session", s.ID, "error", err)
+					m.UpdateStatusMessage(pullCtx, s.ID, "image pull failed: "+err.Error())
+					// Set session to error.
+					if ss, e := m.store.Sessions().Get(pullCtx, s.ID); e == nil {
+						ss.Status = loka.SessionStatusError
+						ss.StatusMessage = "image pull failed: " + err.Error()
+						m.store.Sessions().Update(pullCtx, ss)
+					}
+					return
+				}
+
+				// Update launch data with image paths.
+				launchData.RootfsPath = img.RootfsPath
+				launchData.SnapshotMemPath = img.SnapshotMem
+				launchData.SnapshotVMStatePath = img.SnapshotVMState
+
+				m.UpdateStatusMessage(pullCtx, s.ID, "booting")
+
+				// Send launch command to worker.
+				m.registry.SendCommand(s.WorkerID, worker.WorkerCommand{
+					ID:   uuid.New().String(),
+					Type: "launch_session",
+					Data: launchData,
+				})
+
+				// Mark session as running.
+				m.MarkReady(pullCtx, s.ID)
+				m.logger.Info("session provisioned", "session", s.ID, "image", s.ImageRef)
+			}()
 		}
 
-		m.registry.SendCommand(wConn.Worker.ID, worker.WorkerCommand{
-			ID:   uuid.New().String(),
-			Type: "launch_session",
-			Data: launchData,
-		})
+		// Only send launch command immediately if the image is already cached.
+		// Provisioning sessions send it after the image pull completes (in the goroutine above).
+		if imageReady || s.ImageRef == "" || m.images == nil {
+			m.registry.SendCommand(wConn.Worker.ID, worker.WorkerCommand{
+				ID:   uuid.New().String(),
+				Type: "launch_session",
+				Data: launchData,
+			})
+		}
 		m.logger.Info("session scheduled to worker", "session", s.ID, "worker", wConn.Worker.ID, "image_ready", imageReady)
 	}
 

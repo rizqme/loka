@@ -3,6 +3,7 @@ package controlplane
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/vyprai/loka/internal/controlplane/session"
 	cpworker "github.com/vyprai/loka/internal/controlplane/worker"
@@ -52,10 +53,11 @@ func NewLocalWorker(registry *cpworker.Registry, sm *session.Manager, objStore o
 	return lw, nil
 }
 
-// Start begins processing commands from the registry channel.
+// Start begins processing commands and sending heartbeats.
 func (lw *LocalWorker) Start(ctx context.Context) {
 	lw.logger.Info("local worker started", "id", lw.agent.ID())
 
+	// Command processing loop.
 	go func() {
 		for {
 			select {
@@ -67,6 +69,23 @@ func (lw *LocalWorker) Start(ctx context.Context) {
 					return
 				}
 				lw.handleCommand(ctx, cmd)
+			}
+		}
+	}()
+
+	// Heartbeat loop — keeps the worker alive in the health monitor.
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				hb := lw.agent.Heartbeat()
+				if err := lw.registry.UpdateHeartbeat(ctx, lw.agent.ID(), hb); err != nil {
+					lw.logger.Warn("heartbeat failed", "error", err)
+				}
 			}
 		}
 	}()
