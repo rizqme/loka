@@ -14,12 +14,15 @@ Every session moves through these states:
 | State | Description |
 |---|---|
 | `creating` | VM is booting from a snapshot or image |
+| `provisioning` | Image is being pulled/converted (skipped if cached) |
 | `running` | VM is ready to accept commands |
+| `idle` | VM suspended; auto-wakes on any access (exec, shell, port-forward, sync, domain proxy) |
 | `paused` | VM is suspended; memory is preserved on disk |
+| `terminating` | VM is shutting down |
 | `terminated` | VM is destroyed; resources are freed |
 
 ```
-creating → running ⇄ paused → terminated
+creating → provisioning → running ⇄ idle ⇄ paused → terminating → terminated
 ```
 
 ## Create a session
@@ -153,6 +156,33 @@ CLI equivalent:
 ```bash
 loka session sync <id> /data --direction push   # VM → bucket
 loka session sync <id> /data --direction pull   # bucket → VM
+```
+
+## Interactive Shell
+
+```bash
+loka shell <id>
+```
+
+Opens a full PTY: tab completion, arrow keys, Ctrl-C, resize. Uses gRPC bidirectional streaming.
+
+## Idle / Auto-wake
+
+```bash
+loka session idle <id>              # Suspend to save resources
+loka exec <id> -- python3 script.py # Auto-wakes if idle
+```
+
+Sessions auto-wake on: exec, shell, sync, port-forward, domain proxy access.
+Set `--idle-timeout 300` at create time for automatic idling after 5 min of inactivity.
+
+## Domain Exposure
+
+```bash
+loka session expose <id> my-app --port 5000
+# Access at: https://my-app.loka.example.com
+loka session unexpose <id> my-app
+loka domains
 ```
 
 ## Execution modes

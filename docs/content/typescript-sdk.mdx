@@ -47,6 +47,10 @@ await loka.resumeSession(session.id);
 // Change mode
 await loka.setMode(session.id, 'inspect');
 
+// Idle / auto-wake
+await loka.idleSession(session.id);
+await loka.waitUntilReady(session.id);   // resolves when running (wakes if idle)
+
 // Destroy
 await loka.destroySession(session.id);
 ```
@@ -142,6 +146,20 @@ const session = await loka.createSession({ image: 'python:3.12-slim', mounts: [m
 // Sync a mount to/from its backing bucket
 await loka.syncMount(session.id, { mount_path: '/data', direction: 'push' }); // VM → bucket
 await loka.syncMount(session.id, { mount_path: '/data', direction: 'pull' }); // bucket → VM
+```
+
+## Domain Exposure
+
+```typescript
+// Expose a session port as a public subdomain
+await loka.exposeSession(session.id, 'my-app', { port: 5000 });
+// Access at: https://my-app.loka.example.com
+
+// Remove a subdomain
+await loka.unexposeSession(session.id, 'my-app');
+
+// List all domain routes
+const domains = await loka.listDomains();
 ```
 
 ## Images

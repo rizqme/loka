@@ -38,6 +38,11 @@ loka deploy down dev                    # Stop specific
 loka deploy destroy prod                # Remove permanently
 loka deploy export                      # Export active server as YAML
 loka deploy export prod prod.yml        # Export specific server to file
+loka deploy vm --name prod --cp 10.0.0.1 --worker 10.0.0.2
+loka deploy azure --name eu --region westeurope --workers 2
+loka deploy do --name nyc --region nyc1 --workers 2
+loka deploy ovh --name fra --region gra --workers 2
+loka current                              # Show active server
 ```
 
 Servers are stored in `~/.loka/deployments.json`. All commands (`session`, `exec`, etc.) target the active server.
@@ -108,6 +113,13 @@ loka session mount <id> ~/data /data --read-only
 loka session sync <id> /data --direction push          # VM → bucket
 loka session sync <id> /data --direction pull          # bucket → VM
 loka session sync <id> /data -d push --prefix results/ --dry-run
+
+# Idle / wake
+loka session idle <id>                    # Suspend (auto-wakes on access)
+
+# Domain exposure
+loka session expose <id> my-app --port 5000   # Expose via subdomain
+loka session unexpose <id> my-app             # Remove subdomain
 ```
 
 ## Commands
@@ -116,6 +128,14 @@ loka session sync <id> /data -d push --prefix results/ --dry-run
 loka exec <session-id> -- echo "hello"
 loka exec <session-id> -- python3 script.py
 loka exec <session-id> --parallel --cmd "echo A" --cmd "echo B"
+```
+
+## Shell
+
+```bash
+loka shell <id>                           # Interactive shell (/bin/bash)
+loka shell <id> --shell /bin/sh           # Custom shell
+loka shell <id> --workdir /workspace      # With working directory
 ```
 
 ## Checkpoints
@@ -144,6 +164,12 @@ loka worker undrain <id>
 loka worker deregister <id>              # Deregister by worker ID (API only)
 loka worker label <id> gpu=true
 loka worker top                          # Resource usage across workers
+```
+
+## Domains
+
+```bash
+loka domains                              # List all domain routes
 ```
 
 ## Images

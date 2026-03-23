@@ -47,6 +47,10 @@ client.resume_session(session.id)
 # Change mode
 client.set_mode(session.id, "inspect")
 
+# Idle / auto-wake
+client.idle_session(session.id)
+client.wait_until_ready(session.id)   # blocks until running (wakes if idle)
+
 # Destroy
 client.destroy_session(session.id)
 ```
@@ -139,6 +143,20 @@ session = client.create_session(image="python:3.12-slim", mounts=[mount])
 # Sync a mount to/from its backing bucket
 client.sync_mount(session.id, "/data", direction="push")   # VM → bucket
 client.sync_mount(session.id, "/data", direction="pull")   # bucket → VM
+```
+
+## Domain Exposure
+
+```python
+# Expose a session port as a public subdomain
+client.expose_session(session.id, "my-app", port=5000)
+# Access at: https://my-app.loka.example.com
+
+# Remove a subdomain
+client.unexpose_session(session.id, "my-app")
+
+# List all domain routes
+domains = client.list_domains()
 ```
 
 ## Images
