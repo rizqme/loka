@@ -5,113 +5,46 @@ description: EC2 bare-metal instances with KVM
 
 # Deploy to AWS
 
-## Prerequisites
-
-You need AWS credentials configured:
+## Credentials
 
 ```bash
-# Option 1: AWS CLI
+# Option 1: AWS CLI (recommended)
 aws configure
-# Enter: Access Key ID, Secret Access Key, Region
 
 # Option 2: Environment variables
 export AWS_ACCESS_KEY_ID=AKIA...
 export AWS_SECRET_ACCESS_KEY=...
 export AWS_DEFAULT_REGION=us-east-1
-
-# Option 3: Pass directly
-loka deploy aws --access-key AKIA... --secret-key ... --region us-east-1
 ```
 
 ## Deploy
 
 ```bash
-loka deploy aws --region us-east-1 --workers 3
+loka deploy aws --name prod --region us-east-1 --workers 3
 ```
-
-This creates:
-
-| Resource | Spec | Purpose |
-|----------|------|---------|
-| 1x `t3.medium` | 2 vCPU, 4GB | Control plane (lokad + SQLite) |
-| 3x `i3.metal` | 36 vCPU, 512GB, KVM | Workers (Firecracker VMs) |
-| VPC + subnets | | Networking |
-| Security groups | 8080, 9090, 22 | API, gRPC, SSH |
 
 ## Options
 
-```bash
-loka deploy aws \
-  --region us-east-1 \
-  --workers 3 \
-  --instance-type i3.metal \
-  --ssh-key my-keypair \
-  --vpc-id vpc-abc123          # Use existing VPC
-```
-
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--name` | `aws` | Deployment name |
 | `--region` | `us-east-1` | AWS region |
 | `--workers` | `1` | Number of worker instances |
 | `--instance-type` | `i3.metal` | Worker instance type (must support KVM) |
-| `--ssh-key` | | EC2 key pair name for SSH access |
-| `--vpc-id` | | Use existing VPC (creates new if omitted) |
-| `--access-key` | | AWS access key (or use `AWS_ACCESS_KEY_ID`) |
-| `--secret-key` | | AWS secret key (or use `AWS_SECRET_ACCESS_KEY`) |
+| `--ssh-key` | | EC2 key pair name |
 
-## Instance types
-
-| Instance | KVM | Notes |
-|----------|-----|-------|
-| `i3.metal` | Yes | Best choice — bare-metal, NVMe storage |
-| `m5.metal` | Yes | General purpose bare-metal |
-| `c5.metal` | Yes | Compute-optimized bare-metal |
-| `m5.xlarge` | No | Regular instances don't have `/dev/kvm` |
-
-Only `.metal` instances expose KVM. Regular instances won't work.
-
-## Security groups
-
-The deploy creates two security groups:
-
-**Control plane:**
-
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 8080 | TCP | Your IP | REST API |
-| 22 | TCP | Your IP | SSH |
-
-**Workers:**
-
-| Port | Protocol | Source | Purpose |
-|------|----------|--------|---------|
-| 9090 | TCP | Control plane SG | gRPC (worker registration) |
-| 22 | TCP | Your IP | SSH |
+Only `.metal` instances have KVM: `i3.metal`, `m5.metal`, `c5.metal`.
 
 ## Manual setup
-
-If you prefer to set up manually instead of using `loka deploy`:
 
 ### 1. Launch instances
 
 ```bash
-# Control plane
-aws ec2 run-instances \
-  --image-id ami-0c7217cdde317cfec \
-  --instance-type t3.medium \
-  --key-name my-key \
-  --security-groups loka-cp
-
-# Workers (bare-metal for KVM)
-aws ec2 run-instances \
-  --image-id ami-0c7217cdde317cfec \
-  --instance-type i3.metal \
-  --key-name my-key \
-  --security-groups loka-worker \
-  --count 3
+aws ec2 run-instances --image-id ami-0c7217cdde317cfec \
+  --instance-type i3.metal --key-name my-key --count 3
 ```
 
-### 2. Install on each instance
+### 2. Install on each
 
 ```bash
 ssh ubuntu@<ip>
@@ -121,28 +54,20 @@ curl -fsSL https://rizqme.github.io/loka/install.sh | bash
 ### 3. Start control plane
 
 ```bash
-# On the CP instance:
-loka deploy local -f
+loka deploy local --name prod -f
 ```
 
 ### 4. Register workers
 
 ```bash
-# On the CP — create a token:
+# On CP: create token
 loka token create --name worker-1
 
-# On each worker:
+# On worker:
 cat > /etc/loka/worker.yaml << YAML
 control_plane:
-  address: "<cp-private-ip>:9090"
+  address: "<cp-ip>:9090"
 token: "loka_..."
 YAML
-
 loka-worker
-```
-
-## Tear down
-
-```bash
-loka deploy destroy
 ```

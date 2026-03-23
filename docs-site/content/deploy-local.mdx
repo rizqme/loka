@@ -5,56 +5,36 @@ description: Single machine setup
 
 # Deploy Locally
 
-Run LOKA on a single machine. No cloud account needed.
-
-## One command
-
 ```bash
-curl -fsSL https://rizqme.github.io/loka/install.sh | bash
-lokad
+loka deploy local --name dev
 ```
 
-Or with the CLI:
+This starts `lokad` in the background with an embedded worker, SQLite, and local storage.
 
-```bash
-loka deploy local
-```
+## Options
 
-This starts `lokad` with an embedded worker, SQLite database, and local object store. Everything runs in one process.
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--name` | `local` | Deployment name |
+| `-f, --foreground` | `false` | Run in foreground (attached to terminal) |
 
-## What you get
+## What it creates
 
 | Component | Details |
 |-----------|---------|
-| Control plane | `localhost:8080` |
-| Database | SQLite (`/var/loka/loka.db`) |
-| Object store | Local filesystem (`/var/loka/artifacts/`) |
-| Worker | Embedded (same process as control plane) |
-| Coordinator | In-process (no Redis) |
+| Control plane | `http://localhost:8080` |
+| Database | SQLite |
+| Workers | 1 (embedded) |
 
-## Requirements
-
-- Linux with KVM (`/dev/kvm`)
-- Docker (for `loka image pull`)
-
-## Verify
+## Stop
 
 ```bash
-loka status
-# Control Plane:  ok
-# Workers:        1 ready / 1 total
+loka deploy down        # Stop the active deployment
+loka deploy down dev    # Stop a specific deployment
 ```
 
-## Configuration
+## Destroy
 
-Edit `/etc/loka/controlplane.yaml` or set `LOKA_CONFIG`:
-
-```yaml
-mode: single
-listen_addr: ":8080"
-database:
-  driver: sqlite
-  dsn: "/var/loka/loka.db"
+```bash
+loka deploy destroy dev
 ```
-
-See [Installation](installation.md) for full config reference.
