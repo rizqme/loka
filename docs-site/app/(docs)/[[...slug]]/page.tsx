@@ -8,7 +8,7 @@ export default async function Page(props: { params: Promise<{ slug?: string[] }>
 
   // Root path → redirect to introduction
   if (!params.slug || params.slug.length === 0) {
-    redirect("/loka/introduction");
+    redirect("/introduction");
   }
 
   const page = source.getPage(params.slug);
