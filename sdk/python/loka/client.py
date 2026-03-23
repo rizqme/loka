@@ -87,6 +87,26 @@ class LokaClient:
             "dry_run": dry_run,
         })
 
+    def mount_local(self, session_id: str, local_path: str, vm_path: str,
+                    read_only: bool = False) -> None:
+        """Mount a local directory into a session via gRPC tunnel.
+
+        This is a blocking call — it keeps the tunnel open until interrupted.
+        The local directory is served on-demand to the VM over gRPC streaming.
+
+        Args:
+            session_id: Session ID.
+            local_path: Local directory path on your machine.
+            vm_path: Where it appears inside the VM (e.g. "/workspace").
+            read_only: Mount as read-only.
+
+        Note: Requires gRPC connection. Use LokaClient(url="grpc://host:6841").
+        """
+        raise NotImplementedError(
+            "mount_local requires gRPC streaming. Use the CLI: "
+            "loka session mount <id> <local-path> <vm-path>"
+        )
+
     def pause_session(self, session_id: str) -> Session:
         return self._as(Session, self._post(f"/api/v1/sessions/{session_id}/pause"))
 

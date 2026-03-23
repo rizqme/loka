@@ -24,6 +24,7 @@ func newSessionCmd() *cobra.Command {
 		newSessionPauseCmd(),
 		newSessionResumeCmd(),
 		newSessionModeCmd(),
+		newSessionMountLocalCmd(),
 		newSessionSyncCmd(),
 	)
 	return cmd

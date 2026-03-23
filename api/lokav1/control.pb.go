@@ -1926,6 +1926,852 @@ func (x *RemoveWorkerRequest) GetForce() bool {
 	return false
 }
 
+type FileTunnelMessage struct {
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	SessionId string                 `protobuf:"bytes,1,opt,name=session_id,json=sessionId,proto3" json:"session_id,omitempty"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*FileTunnelMessage_Init
+	//	*FileTunnelMessage_ReadReq
+	//	*FileTunnelMessage_ReadResp
+	//	*FileTunnelMessage_WriteReq
+	//	*FileTunnelMessage_WriteResp
+	//	*FileTunnelMessage_ListReq
+	//	*FileTunnelMessage_ListResp
+	//	*FileTunnelMessage_StatReq
+	//	*FileTunnelMessage_StatResp
+	//	*FileTunnelMessage_Error
+	Payload       isFileTunnelMessage_Payload `protobuf_oneof:"payload"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *FileTunnelMessage) Reset() {
+	*x = FileTunnelMessage{}
+	mi := &file_control_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *FileTunnelMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*FileTunnelMessage) ProtoMessage() {}
+
+func (x *FileTunnelMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use FileTunnelMessage.ProtoReflect.Descriptor instead.
+func (*FileTunnelMessage) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *FileTunnelMessage) GetSessionId() string {
+	if x != nil {
+		return x.SessionId
+	}
+	return ""
+}
+
+func (x *FileTunnelMessage) GetPayload() isFileTunnelMessage_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetInit() *TunnelInit {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_Init); ok {
+			return x.Init
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetReadReq() *TunnelReadReq {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_ReadReq); ok {
+			return x.ReadReq
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetReadResp() *TunnelReadResp {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_ReadResp); ok {
+			return x.ReadResp
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetWriteReq() *TunnelWriteReq {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_WriteReq); ok {
+			return x.WriteReq
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetWriteResp() *TunnelWriteResp {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_WriteResp); ok {
+			return x.WriteResp
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetListReq() *TunnelListReq {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_ListReq); ok {
+			return x.ListReq
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetListResp() *TunnelListResp {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_ListResp); ok {
+			return x.ListResp
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetStatReq() *TunnelStatReq {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_StatReq); ok {
+			return x.StatReq
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetStatResp() *TunnelStatResp {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_StatResp); ok {
+			return x.StatResp
+		}
+	}
+	return nil
+}
+
+func (x *FileTunnelMessage) GetError() *TunnelError {
+	if x != nil {
+		if x, ok := x.Payload.(*FileTunnelMessage_Error); ok {
+			return x.Error
+		}
+	}
+	return nil
+}
+
+type isFileTunnelMessage_Payload interface {
+	isFileTunnelMessage_Payload()
+}
+
+type FileTunnelMessage_Init struct {
+	Init *TunnelInit `protobuf:"bytes,2,opt,name=init,proto3,oneof"` // First message: set up the tunnel.
+}
+
+type FileTunnelMessage_ReadReq struct {
+	ReadReq *TunnelReadReq `protobuf:"bytes,3,opt,name=read_req,json=readReq,proto3,oneof"` // VM wants to read a file.
+}
+
+type FileTunnelMessage_ReadResp struct {
+	ReadResp *TunnelReadResp `protobuf:"bytes,4,opt,name=read_resp,json=readResp,proto3,oneof"` // CLI responds with file content.
+}
+
+type FileTunnelMessage_WriteReq struct {
+	WriteReq *TunnelWriteReq `protobuf:"bytes,5,opt,name=write_req,json=writeReq,proto3,oneof"` // VM wants to write a file.
+}
+
+type FileTunnelMessage_WriteResp struct {
+	WriteResp *TunnelWriteResp `protobuf:"bytes,6,opt,name=write_resp,json=writeResp,proto3,oneof"` // CLI confirms write.
+}
+
+type FileTunnelMessage_ListReq struct {
+	ListReq *TunnelListReq `protobuf:"bytes,7,opt,name=list_req,json=listReq,proto3,oneof"` // VM wants to list a directory.
+}
+
+type FileTunnelMessage_ListResp struct {
+	ListResp *TunnelListResp `protobuf:"bytes,8,opt,name=list_resp,json=listResp,proto3,oneof"` // CLI responds with directory listing.
+}
+
+type FileTunnelMessage_StatReq struct {
+	StatReq *TunnelStatReq `protobuf:"bytes,9,opt,name=stat_req,json=statReq,proto3,oneof"` // VM wants file metadata.
+}
+
+type FileTunnelMessage_StatResp struct {
+	StatResp *TunnelStatResp `protobuf:"bytes,10,opt,name=stat_resp,json=statResp,proto3,oneof"` // CLI responds with stat.
+}
+
+type FileTunnelMessage_Error struct {
+	Error *TunnelError `protobuf:"bytes,11,opt,name=error,proto3,oneof"` // Error from either side.
+}
+
+func (*FileTunnelMessage_Init) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_ReadReq) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_ReadResp) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_WriteReq) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_WriteResp) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_ListReq) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_ListResp) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_StatReq) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_StatResp) isFileTunnelMessage_Payload() {}
+
+func (*FileTunnelMessage_Error) isFileTunnelMessage_Payload() {}
+
+type TunnelInit struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	LocalPath     string                 `protobuf:"bytes,1,opt,name=local_path,json=localPath,proto3" json:"local_path,omitempty"` // Local directory on the CLI machine.
+	MountPath     string                 `protobuf:"bytes,2,opt,name=mount_path,json=mountPath,proto3" json:"mount_path,omitempty"` // Where it appears in the VM.
+	ReadOnly      bool                   `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelInit) Reset() {
+	*x = TunnelInit{}
+	mi := &file_control_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelInit) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelInit) ProtoMessage() {}
+
+func (x *TunnelInit) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelInit.ProtoReflect.Descriptor instead.
+func (*TunnelInit) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *TunnelInit) GetLocalPath() string {
+	if x != nil {
+		return x.LocalPath
+	}
+	return ""
+}
+
+func (x *TunnelInit) GetMountPath() string {
+	if x != nil {
+		return x.MountPath
+	}
+	return ""
+}
+
+func (x *TunnelInit) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+type TunnelReadReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // Relative path within the mount.
+	Offset        int64                  `protobuf:"varint,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	Length        int64                  `protobuf:"varint,3,opt,name=length,proto3" json:"length,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelReadReq) Reset() {
+	*x = TunnelReadReq{}
+	mi := &file_control_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelReadReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelReadReq) ProtoMessage() {}
+
+func (x *TunnelReadReq) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelReadReq.ProtoReflect.Descriptor instead.
+func (*TunnelReadReq) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *TunnelReadReq) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *TunnelReadReq) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *TunnelReadReq) GetLength() int64 {
+	if x != nil {
+		return x.Length
+	}
+	return 0
+}
+
+type TunnelReadResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Data          []byte                 `protobuf:"bytes,1,opt,name=data,proto3" json:"data,omitempty"`
+	Eof           bool                   `protobuf:"varint,2,opt,name=eof,proto3" json:"eof,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelReadResp) Reset() {
+	*x = TunnelReadResp{}
+	mi := &file_control_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelReadResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelReadResp) ProtoMessage() {}
+
+func (x *TunnelReadResp) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelReadResp.ProtoReflect.Descriptor instead.
+func (*TunnelReadResp) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *TunnelReadResp) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *TunnelReadResp) GetEof() bool {
+	if x != nil {
+		return x.Eof
+	}
+	return false
+}
+
+type TunnelWriteReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	Data          []byte                 `protobuf:"bytes,2,opt,name=data,proto3" json:"data,omitempty"`
+	Offset        int64                  `protobuf:"varint,3,opt,name=offset,proto3" json:"offset,omitempty"`
+	Truncate      bool                   `protobuf:"varint,4,opt,name=truncate,proto3" json:"truncate,omitempty"` // Truncate file before writing.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelWriteReq) Reset() {
+	*x = TunnelWriteReq{}
+	mi := &file_control_proto_msgTypes[40]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelWriteReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelWriteReq) ProtoMessage() {}
+
+func (x *TunnelWriteReq) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[40]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelWriteReq.ProtoReflect.Descriptor instead.
+func (*TunnelWriteReq) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{40}
+}
+
+func (x *TunnelWriteReq) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *TunnelWriteReq) GetData() []byte {
+	if x != nil {
+		return x.Data
+	}
+	return nil
+}
+
+func (x *TunnelWriteReq) GetOffset() int64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *TunnelWriteReq) GetTruncate() bool {
+	if x != nil {
+		return x.Truncate
+	}
+	return false
+}
+
+type TunnelWriteResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BytesWritten  int64                  `protobuf:"varint,1,opt,name=bytes_written,json=bytesWritten,proto3" json:"bytes_written,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelWriteResp) Reset() {
+	*x = TunnelWriteResp{}
+	mi := &file_control_proto_msgTypes[41]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelWriteResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelWriteResp) ProtoMessage() {}
+
+func (x *TunnelWriteResp) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[41]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelWriteResp.ProtoReflect.Descriptor instead.
+func (*TunnelWriteResp) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{41}
+}
+
+func (x *TunnelWriteResp) GetBytesWritten() int64 {
+	if x != nil {
+		return x.BytesWritten
+	}
+	return 0
+}
+
+type TunnelListReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"` // Relative directory path.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelListReq) Reset() {
+	*x = TunnelListReq{}
+	mi := &file_control_proto_msgTypes[42]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelListReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelListReq) ProtoMessage() {}
+
+func (x *TunnelListReq) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[42]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelListReq.ProtoReflect.Descriptor instead.
+func (*TunnelListReq) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{42}
+}
+
+func (x *TunnelListReq) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type TunnelListResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Entries       []*TunnelDirEntry      `protobuf:"bytes,1,rep,name=entries,proto3" json:"entries,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelListResp) Reset() {
+	*x = TunnelListResp{}
+	mi := &file_control_proto_msgTypes[43]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelListResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelListResp) ProtoMessage() {}
+
+func (x *TunnelListResp) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[43]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelListResp.ProtoReflect.Descriptor instead.
+func (*TunnelListResp) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{43}
+}
+
+func (x *TunnelListResp) GetEntries() []*TunnelDirEntry {
+	if x != nil {
+		return x.Entries
+	}
+	return nil
+}
+
+type TunnelDirEntry struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	IsDir         bool                   `protobuf:"varint,2,opt,name=is_dir,json=isDir,proto3" json:"is_dir,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Mode          int64                  `protobuf:"varint,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	ModTime       int64                  `protobuf:"varint,5,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"` // Unix timestamp.
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelDirEntry) Reset() {
+	*x = TunnelDirEntry{}
+	mi := &file_control_proto_msgTypes[44]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelDirEntry) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelDirEntry) ProtoMessage() {}
+
+func (x *TunnelDirEntry) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[44]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelDirEntry.ProtoReflect.Descriptor instead.
+func (*TunnelDirEntry) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{44}
+}
+
+func (x *TunnelDirEntry) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TunnelDirEntry) GetIsDir() bool {
+	if x != nil {
+		return x.IsDir
+	}
+	return false
+}
+
+func (x *TunnelDirEntry) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *TunnelDirEntry) GetMode() int64 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+func (x *TunnelDirEntry) GetModTime() int64 {
+	if x != nil {
+		return x.ModTime
+	}
+	return 0
+}
+
+type TunnelStatReq struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Path          string                 `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelStatReq) Reset() {
+	*x = TunnelStatReq{}
+	mi := &file_control_proto_msgTypes[45]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelStatReq) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelStatReq) ProtoMessage() {}
+
+func (x *TunnelStatReq) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[45]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelStatReq.ProtoReflect.Descriptor instead.
+func (*TunnelStatReq) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{45}
+}
+
+func (x *TunnelStatReq) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+type TunnelStatResp struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	IsDir         bool                   `protobuf:"varint,2,opt,name=is_dir,json=isDir,proto3" json:"is_dir,omitempty"`
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`
+	Mode          int64                  `protobuf:"varint,4,opt,name=mode,proto3" json:"mode,omitempty"`
+	ModTime       int64                  `protobuf:"varint,5,opt,name=mod_time,json=modTime,proto3" json:"mod_time,omitempty"`
+	Exists        bool                   `protobuf:"varint,6,opt,name=exists,proto3" json:"exists,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelStatResp) Reset() {
+	*x = TunnelStatResp{}
+	mi := &file_control_proto_msgTypes[46]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelStatResp) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelStatResp) ProtoMessage() {}
+
+func (x *TunnelStatResp) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[46]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelStatResp.ProtoReflect.Descriptor instead.
+func (*TunnelStatResp) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{46}
+}
+
+func (x *TunnelStatResp) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TunnelStatResp) GetIsDir() bool {
+	if x != nil {
+		return x.IsDir
+	}
+	return false
+}
+
+func (x *TunnelStatResp) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *TunnelStatResp) GetMode() int64 {
+	if x != nil {
+		return x.Mode
+	}
+	return 0
+}
+
+func (x *TunnelStatResp) GetModTime() int64 {
+	if x != nil {
+		return x.ModTime
+	}
+	return 0
+}
+
+func (x *TunnelStatResp) GetExists() bool {
+	if x != nil {
+		return x.Exists
+	}
+	return false
+}
+
+type TunnelError struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Message       string                 `protobuf:"bytes,1,opt,name=message,proto3" json:"message,omitempty"`
+	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TunnelError) Reset() {
+	*x = TunnelError{}
+	mi := &file_control_proto_msgTypes[47]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TunnelError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TunnelError) ProtoMessage() {}
+
+func (x *TunnelError) ProtoReflect() protoreflect.Message {
+	mi := &file_control_proto_msgTypes[47]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TunnelError.ProtoReflect.Descriptor instead.
+func (*TunnelError) Descriptor() ([]byte, []int) {
+	return file_control_proto_rawDescGZIP(), []int{47}
+}
+
+func (x *TunnelError) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+func (x *TunnelError) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
 var File_control_proto protoreflect.FileDescriptor
 
 const file_control_proto_rawDesc = "" +
@@ -2066,7 +2912,66 @@ const file_control_proto_rawDesc = "" +
 	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\";\n" +
 	"\x13RemoveWorkerRequest\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
-	"\x05force\x18\x02 \x01(\bR\x05force2\xee\x11\n" +
+	"\x05force\x18\x02 \x01(\bR\x05force\"\xf8\x04\n" +
+	"\x11FileTunnelMessage\x12\x1d\n" +
+	"\n" +
+	"session_id\x18\x01 \x01(\tR\tsessionId\x12-\n" +
+	"\x04init\x18\x02 \x01(\v2\x17.loka.api.v1.TunnelInitH\x00R\x04init\x127\n" +
+	"\bread_req\x18\x03 \x01(\v2\x1a.loka.api.v1.TunnelReadReqH\x00R\areadReq\x12:\n" +
+	"\tread_resp\x18\x04 \x01(\v2\x1b.loka.api.v1.TunnelReadRespH\x00R\breadResp\x12:\n" +
+	"\twrite_req\x18\x05 \x01(\v2\x1b.loka.api.v1.TunnelWriteReqH\x00R\bwriteReq\x12=\n" +
+	"\n" +
+	"write_resp\x18\x06 \x01(\v2\x1c.loka.api.v1.TunnelWriteRespH\x00R\twriteResp\x127\n" +
+	"\blist_req\x18\a \x01(\v2\x1a.loka.api.v1.TunnelListReqH\x00R\alistReq\x12:\n" +
+	"\tlist_resp\x18\b \x01(\v2\x1b.loka.api.v1.TunnelListRespH\x00R\blistResp\x127\n" +
+	"\bstat_req\x18\t \x01(\v2\x1a.loka.api.v1.TunnelStatReqH\x00R\astatReq\x12:\n" +
+	"\tstat_resp\x18\n" +
+	" \x01(\v2\x1b.loka.api.v1.TunnelStatRespH\x00R\bstatResp\x120\n" +
+	"\x05error\x18\v \x01(\v2\x18.loka.api.v1.TunnelErrorH\x00R\x05errorB\t\n" +
+	"\apayload\"g\n" +
+	"\n" +
+	"TunnelInit\x12\x1d\n" +
+	"\n" +
+	"local_path\x18\x01 \x01(\tR\tlocalPath\x12\x1d\n" +
+	"\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\"S\n" +
+	"\rTunnelReadReq\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x03R\x06offset\x12\x16\n" +
+	"\x06length\x18\x03 \x01(\x03R\x06length\"6\n" +
+	"\x0eTunnelReadResp\x12\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data\x12\x10\n" +
+	"\x03eof\x18\x02 \x01(\bR\x03eof\"l\n" +
+	"\x0eTunnelWriteReq\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
+	"\x04data\x18\x02 \x01(\fR\x04data\x12\x16\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\x12\x1a\n" +
+	"\btruncate\x18\x04 \x01(\bR\btruncate\"6\n" +
+	"\x0fTunnelWriteResp\x12#\n" +
+	"\rbytes_written\x18\x01 \x01(\x03R\fbytesWritten\"#\n" +
+	"\rTunnelListReq\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"G\n" +
+	"\x0eTunnelListResp\x125\n" +
+	"\aentries\x18\x01 \x03(\v2\x1b.loka.api.v1.TunnelDirEntryR\aentries\"~\n" +
+	"\x0eTunnelDirEntry\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x15\n" +
+	"\x06is_dir\x18\x02 \x01(\bR\x05isDir\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\x03R\x04mode\x12\x19\n" +
+	"\bmod_time\x18\x05 \x01(\x03R\amodTime\"#\n" +
+	"\rTunnelStatReq\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\"\x96\x01\n" +
+	"\x0eTunnelStatResp\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x15\n" +
+	"\x06is_dir\x18\x02 \x01(\bR\x05isDir\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x12\n" +
+	"\x04mode\x18\x04 \x01(\x03R\x04mode\x12\x19\n" +
+	"\bmod_time\x18\x05 \x01(\x03R\amodTime\x12\x16\n" +
+	"\x06exists\x18\x06 \x01(\bR\x06exists\";\n" +
+	"\vTunnelError\x12\x18\n" +
+	"\amessage\x18\x01 \x01(\tR\amessage\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path2\xc0\x12\n" +
 	"\x0eControlService\x12H\n" +
 	"\rCreateSession\x12!.loka.api.v1.CreateSessionRequest\x1a\x14.loka.api.v1.Session\x12B\n" +
 	"\n" +
@@ -2098,7 +3003,9 @@ const file_control_proto_rawDesc = "" +
 	"\vListWorkers\x12\x1f.loka.api.v1.ListWorkersRequest\x1a .loka.api.v1.ListWorkersResponse\x12?\n" +
 	"\tGetWorker\x12\x1d.loka.api.v1.GetWorkerRequest\x1a\x13.loka.api.v1.Worker\x12C\n" +
 	"\vDrainWorker\x12\x1f.loka.api.v1.DrainWorkerRequest\x1a\x13.loka.api.v1.Worker\x12H\n" +
-	"\fRemoveWorker\x12 .loka.api.v1.RemoveWorkerRequest\x1a\x16.google.protobuf.EmptyB#Z!github.com/vyprai/loka/api/lokav1b\x06proto3"
+	"\fRemoveWorker\x12 .loka.api.v1.RemoveWorkerRequest\x1a\x16.google.protobuf.Empty\x12P\n" +
+	"\n" +
+	"FileTunnel\x12\x1e.loka.api.v1.FileTunnelMessage\x1a\x1e.loka.api.v1.FileTunnelMessage(\x010\x01B#Z!github.com/vyprai/loka/api/lokav1b\x06proto3"
 
 var (
 	file_control_proto_rawDescOnce sync.Once
@@ -2112,7 +3019,7 @@ func file_control_proto_rawDescGZIP() []byte {
 	return file_control_proto_rawDescData
 }
 
-var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_control_proto_msgTypes = make([]protoimpl.MessageInfo, 51)
 var file_control_proto_goTypes = []any{
 	(*CreateSessionRequest)(nil),     // 0: loka.api.v1.CreateSessionRequest
 	(*GetSessionRequest)(nil),        // 1: loka.api.v1.GetSessionRequest
@@ -2150,103 +3057,128 @@ var file_control_proto_goTypes = []any{
 	(*GetWorkerRequest)(nil),         // 33: loka.api.v1.GetWorkerRequest
 	(*DrainWorkerRequest)(nil),       // 34: loka.api.v1.DrainWorkerRequest
 	(*RemoveWorkerRequest)(nil),      // 35: loka.api.v1.RemoveWorkerRequest
-	nil,                              // 36: loka.api.v1.CreateSessionRequest.LabelsEntry
-	nil,                              // 37: loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
-	nil,                              // 38: loka.api.v1.ValidatePackagesResponse.ResultsEntry
-	(ExecMode)(0),                    // 39: loka.api.v1.ExecMode
-	(SessionStatus)(0),               // 40: loka.api.v1.SessionStatus
-	(*Session)(nil),                  // 41: loka.api.v1.Session
-	(*Command)(nil),                  // 42: loka.api.v1.Command
-	(ExecStatus)(0),                  // 43: loka.api.v1.ExecStatus
-	(*Execution)(nil),                // 44: loka.api.v1.Execution
-	(CheckpointType)(0),              // 45: loka.api.v1.CheckpointType
-	(*Package)(nil),                  // 46: loka.api.v1.Package
-	(*PackageProfile)(nil),           // 47: loka.api.v1.PackageProfile
-	(WorkerStatus)(0),                // 48: loka.api.v1.WorkerStatus
-	(*Worker)(nil),                   // 49: loka.api.v1.Worker
-	(*emptypb.Empty)(nil),            // 50: google.protobuf.Empty
-	(*Checkpoint)(nil),               // 51: loka.api.v1.Checkpoint
-	(*CheckpointDAG)(nil),            // 52: loka.api.v1.CheckpointDAG
+	(*FileTunnelMessage)(nil),        // 36: loka.api.v1.FileTunnelMessage
+	(*TunnelInit)(nil),               // 37: loka.api.v1.TunnelInit
+	(*TunnelReadReq)(nil),            // 38: loka.api.v1.TunnelReadReq
+	(*TunnelReadResp)(nil),           // 39: loka.api.v1.TunnelReadResp
+	(*TunnelWriteReq)(nil),           // 40: loka.api.v1.TunnelWriteReq
+	(*TunnelWriteResp)(nil),          // 41: loka.api.v1.TunnelWriteResp
+	(*TunnelListReq)(nil),            // 42: loka.api.v1.TunnelListReq
+	(*TunnelListResp)(nil),           // 43: loka.api.v1.TunnelListResp
+	(*TunnelDirEntry)(nil),           // 44: loka.api.v1.TunnelDirEntry
+	(*TunnelStatReq)(nil),            // 45: loka.api.v1.TunnelStatReq
+	(*TunnelStatResp)(nil),           // 46: loka.api.v1.TunnelStatResp
+	(*TunnelError)(nil),              // 47: loka.api.v1.TunnelError
+	nil,                              // 48: loka.api.v1.CreateSessionRequest.LabelsEntry
+	nil,                              // 49: loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
+	nil,                              // 50: loka.api.v1.ValidatePackagesResponse.ResultsEntry
+	(ExecMode)(0),                    // 51: loka.api.v1.ExecMode
+	(SessionStatus)(0),               // 52: loka.api.v1.SessionStatus
+	(*Session)(nil),                  // 53: loka.api.v1.Session
+	(*Command)(nil),                  // 54: loka.api.v1.Command
+	(ExecStatus)(0),                  // 55: loka.api.v1.ExecStatus
+	(*Execution)(nil),                // 56: loka.api.v1.Execution
+	(CheckpointType)(0),              // 57: loka.api.v1.CheckpointType
+	(*Package)(nil),                  // 58: loka.api.v1.Package
+	(*PackageProfile)(nil),           // 59: loka.api.v1.PackageProfile
+	(WorkerStatus)(0),                // 60: loka.api.v1.WorkerStatus
+	(*Worker)(nil),                   // 61: loka.api.v1.Worker
+	(*emptypb.Empty)(nil),            // 62: google.protobuf.Empty
+	(*Checkpoint)(nil),               // 63: loka.api.v1.Checkpoint
+	(*CheckpointDAG)(nil),            // 64: loka.api.v1.CheckpointDAG
 }
 var file_control_proto_depIdxs = []int32{
-	39, // 0: loka.api.v1.CreateSessionRequest.mode:type_name -> loka.api.v1.ExecMode
-	36, // 1: loka.api.v1.CreateSessionRequest.labels:type_name -> loka.api.v1.CreateSessionRequest.LabelsEntry
-	37, // 2: loka.api.v1.CreateSessionRequest.worker_labels:type_name -> loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
-	40, // 3: loka.api.v1.ListSessionsRequest.status:type_name -> loka.api.v1.SessionStatus
-	41, // 4: loka.api.v1.ListSessionsResponse.sessions:type_name -> loka.api.v1.Session
-	39, // 5: loka.api.v1.SetSessionModeRequest.mode:type_name -> loka.api.v1.ExecMode
-	42, // 6: loka.api.v1.ExecRequest.commands:type_name -> loka.api.v1.Command
-	43, // 7: loka.api.v1.ListExecutionsRequest.status:type_name -> loka.api.v1.ExecStatus
-	44, // 8: loka.api.v1.ListExecutionsResponse.executions:type_name -> loka.api.v1.Execution
-	45, // 9: loka.api.v1.CreateCheckpointRequest.type:type_name -> loka.api.v1.CheckpointType
-	46, // 10: loka.api.v1.ListPackagesResponse.packages:type_name -> loka.api.v1.Package
-	38, // 11: loka.api.v1.ValidatePackagesResponse.results:type_name -> loka.api.v1.ValidatePackagesResponse.ResultsEntry
-	47, // 12: loka.api.v1.ListProfilesResponse.profiles:type_name -> loka.api.v1.PackageProfile
-	48, // 13: loka.api.v1.ListWorkersRequest.status:type_name -> loka.api.v1.WorkerStatus
-	49, // 14: loka.api.v1.ListWorkersResponse.workers:type_name -> loka.api.v1.Worker
-	0,  // 15: loka.api.v1.ControlService.CreateSession:input_type -> loka.api.v1.CreateSessionRequest
-	1,  // 16: loka.api.v1.ControlService.GetSession:input_type -> loka.api.v1.GetSessionRequest
-	2,  // 17: loka.api.v1.ControlService.ListSessions:input_type -> loka.api.v1.ListSessionsRequest
-	4,  // 18: loka.api.v1.ControlService.DestroySession:input_type -> loka.api.v1.DestroySessionRequest
-	5,  // 19: loka.api.v1.ControlService.PauseSession:input_type -> loka.api.v1.PauseSessionRequest
-	6,  // 20: loka.api.v1.ControlService.ResumeSession:input_type -> loka.api.v1.ResumeSessionRequest
-	7,  // 21: loka.api.v1.ControlService.SetSessionMode:input_type -> loka.api.v1.SetSessionModeRequest
-	8,  // 22: loka.api.v1.ControlService.Exec:input_type -> loka.api.v1.ExecRequest
-	9,  // 23: loka.api.v1.ControlService.GetExecution:input_type -> loka.api.v1.GetExecutionRequest
-	10, // 24: loka.api.v1.ControlService.ListExecutions:input_type -> loka.api.v1.ListExecutionsRequest
-	12, // 25: loka.api.v1.ControlService.CancelExecution:input_type -> loka.api.v1.CancelExecutionRequest
-	13, // 26: loka.api.v1.ControlService.StreamExecOutput:input_type -> loka.api.v1.StreamExecOutputRequest
-	15, // 27: loka.api.v1.ControlService.CreateCheckpoint:input_type -> loka.api.v1.CreateCheckpointRequest
-	16, // 28: loka.api.v1.ControlService.GetCheckpoint:input_type -> loka.api.v1.GetCheckpointRequest
-	17, // 29: loka.api.v1.ControlService.ListCheckpoints:input_type -> loka.api.v1.ListCheckpointsRequest
-	18, // 30: loka.api.v1.ControlService.RestoreCheckpoint:input_type -> loka.api.v1.RestoreCheckpointRequest
-	19, // 31: loka.api.v1.ControlService.DeleteCheckpoint:input_type -> loka.api.v1.DeleteCheckpointRequest
-	20, // 32: loka.api.v1.ControlService.InstallPackage:input_type -> loka.api.v1.InstallPackageRequest
-	21, // 33: loka.api.v1.ControlService.ListPackages:input_type -> loka.api.v1.ListPackagesRequest
-	23, // 34: loka.api.v1.ControlService.ValidatePackages:input_type -> loka.api.v1.ValidatePackagesRequest
-	25, // 35: loka.api.v1.ControlService.CreateProfile:input_type -> loka.api.v1.CreateProfileRequest
-	26, // 36: loka.api.v1.ControlService.GetProfile:input_type -> loka.api.v1.GetProfileRequest
-	27, // 37: loka.api.v1.ControlService.ListProfiles:input_type -> loka.api.v1.ListProfilesRequest
-	29, // 38: loka.api.v1.ControlService.UpdateProfile:input_type -> loka.api.v1.UpdateProfileRequest
-	30, // 39: loka.api.v1.ControlService.DeleteProfile:input_type -> loka.api.v1.DeleteProfileRequest
-	31, // 40: loka.api.v1.ControlService.ListWorkers:input_type -> loka.api.v1.ListWorkersRequest
-	33, // 41: loka.api.v1.ControlService.GetWorker:input_type -> loka.api.v1.GetWorkerRequest
-	34, // 42: loka.api.v1.ControlService.DrainWorker:input_type -> loka.api.v1.DrainWorkerRequest
-	35, // 43: loka.api.v1.ControlService.RemoveWorker:input_type -> loka.api.v1.RemoveWorkerRequest
-	41, // 44: loka.api.v1.ControlService.CreateSession:output_type -> loka.api.v1.Session
-	41, // 45: loka.api.v1.ControlService.GetSession:output_type -> loka.api.v1.Session
-	3,  // 46: loka.api.v1.ControlService.ListSessions:output_type -> loka.api.v1.ListSessionsResponse
-	50, // 47: loka.api.v1.ControlService.DestroySession:output_type -> google.protobuf.Empty
-	41, // 48: loka.api.v1.ControlService.PauseSession:output_type -> loka.api.v1.Session
-	41, // 49: loka.api.v1.ControlService.ResumeSession:output_type -> loka.api.v1.Session
-	41, // 50: loka.api.v1.ControlService.SetSessionMode:output_type -> loka.api.v1.Session
-	44, // 51: loka.api.v1.ControlService.Exec:output_type -> loka.api.v1.Execution
-	44, // 52: loka.api.v1.ControlService.GetExecution:output_type -> loka.api.v1.Execution
-	11, // 53: loka.api.v1.ControlService.ListExecutions:output_type -> loka.api.v1.ListExecutionsResponse
-	44, // 54: loka.api.v1.ControlService.CancelExecution:output_type -> loka.api.v1.Execution
-	14, // 55: loka.api.v1.ControlService.StreamExecOutput:output_type -> loka.api.v1.OutputChunk
-	51, // 56: loka.api.v1.ControlService.CreateCheckpoint:output_type -> loka.api.v1.Checkpoint
-	51, // 57: loka.api.v1.ControlService.GetCheckpoint:output_type -> loka.api.v1.Checkpoint
-	52, // 58: loka.api.v1.ControlService.ListCheckpoints:output_type -> loka.api.v1.CheckpointDAG
-	41, // 59: loka.api.v1.ControlService.RestoreCheckpoint:output_type -> loka.api.v1.Session
-	50, // 60: loka.api.v1.ControlService.DeleteCheckpoint:output_type -> google.protobuf.Empty
-	46, // 61: loka.api.v1.ControlService.InstallPackage:output_type -> loka.api.v1.Package
-	22, // 62: loka.api.v1.ControlService.ListPackages:output_type -> loka.api.v1.ListPackagesResponse
-	24, // 63: loka.api.v1.ControlService.ValidatePackages:output_type -> loka.api.v1.ValidatePackagesResponse
-	47, // 64: loka.api.v1.ControlService.CreateProfile:output_type -> loka.api.v1.PackageProfile
-	47, // 65: loka.api.v1.ControlService.GetProfile:output_type -> loka.api.v1.PackageProfile
-	28, // 66: loka.api.v1.ControlService.ListProfiles:output_type -> loka.api.v1.ListProfilesResponse
-	47, // 67: loka.api.v1.ControlService.UpdateProfile:output_type -> loka.api.v1.PackageProfile
-	50, // 68: loka.api.v1.ControlService.DeleteProfile:output_type -> google.protobuf.Empty
-	32, // 69: loka.api.v1.ControlService.ListWorkers:output_type -> loka.api.v1.ListWorkersResponse
-	49, // 70: loka.api.v1.ControlService.GetWorker:output_type -> loka.api.v1.Worker
-	49, // 71: loka.api.v1.ControlService.DrainWorker:output_type -> loka.api.v1.Worker
-	50, // 72: loka.api.v1.ControlService.RemoveWorker:output_type -> google.protobuf.Empty
-	44, // [44:73] is the sub-list for method output_type
-	15, // [15:44] is the sub-list for method input_type
-	15, // [15:15] is the sub-list for extension type_name
-	15, // [15:15] is the sub-list for extension extendee
-	0,  // [0:15] is the sub-list for field type_name
+	51, // 0: loka.api.v1.CreateSessionRequest.mode:type_name -> loka.api.v1.ExecMode
+	48, // 1: loka.api.v1.CreateSessionRequest.labels:type_name -> loka.api.v1.CreateSessionRequest.LabelsEntry
+	49, // 2: loka.api.v1.CreateSessionRequest.worker_labels:type_name -> loka.api.v1.CreateSessionRequest.WorkerLabelsEntry
+	52, // 3: loka.api.v1.ListSessionsRequest.status:type_name -> loka.api.v1.SessionStatus
+	53, // 4: loka.api.v1.ListSessionsResponse.sessions:type_name -> loka.api.v1.Session
+	51, // 5: loka.api.v1.SetSessionModeRequest.mode:type_name -> loka.api.v1.ExecMode
+	54, // 6: loka.api.v1.ExecRequest.commands:type_name -> loka.api.v1.Command
+	55, // 7: loka.api.v1.ListExecutionsRequest.status:type_name -> loka.api.v1.ExecStatus
+	56, // 8: loka.api.v1.ListExecutionsResponse.executions:type_name -> loka.api.v1.Execution
+	57, // 9: loka.api.v1.CreateCheckpointRequest.type:type_name -> loka.api.v1.CheckpointType
+	58, // 10: loka.api.v1.ListPackagesResponse.packages:type_name -> loka.api.v1.Package
+	50, // 11: loka.api.v1.ValidatePackagesResponse.results:type_name -> loka.api.v1.ValidatePackagesResponse.ResultsEntry
+	59, // 12: loka.api.v1.ListProfilesResponse.profiles:type_name -> loka.api.v1.PackageProfile
+	60, // 13: loka.api.v1.ListWorkersRequest.status:type_name -> loka.api.v1.WorkerStatus
+	61, // 14: loka.api.v1.ListWorkersResponse.workers:type_name -> loka.api.v1.Worker
+	37, // 15: loka.api.v1.FileTunnelMessage.init:type_name -> loka.api.v1.TunnelInit
+	38, // 16: loka.api.v1.FileTunnelMessage.read_req:type_name -> loka.api.v1.TunnelReadReq
+	39, // 17: loka.api.v1.FileTunnelMessage.read_resp:type_name -> loka.api.v1.TunnelReadResp
+	40, // 18: loka.api.v1.FileTunnelMessage.write_req:type_name -> loka.api.v1.TunnelWriteReq
+	41, // 19: loka.api.v1.FileTunnelMessage.write_resp:type_name -> loka.api.v1.TunnelWriteResp
+	42, // 20: loka.api.v1.FileTunnelMessage.list_req:type_name -> loka.api.v1.TunnelListReq
+	43, // 21: loka.api.v1.FileTunnelMessage.list_resp:type_name -> loka.api.v1.TunnelListResp
+	45, // 22: loka.api.v1.FileTunnelMessage.stat_req:type_name -> loka.api.v1.TunnelStatReq
+	46, // 23: loka.api.v1.FileTunnelMessage.stat_resp:type_name -> loka.api.v1.TunnelStatResp
+	47, // 24: loka.api.v1.FileTunnelMessage.error:type_name -> loka.api.v1.TunnelError
+	44, // 25: loka.api.v1.TunnelListResp.entries:type_name -> loka.api.v1.TunnelDirEntry
+	0,  // 26: loka.api.v1.ControlService.CreateSession:input_type -> loka.api.v1.CreateSessionRequest
+	1,  // 27: loka.api.v1.ControlService.GetSession:input_type -> loka.api.v1.GetSessionRequest
+	2,  // 28: loka.api.v1.ControlService.ListSessions:input_type -> loka.api.v1.ListSessionsRequest
+	4,  // 29: loka.api.v1.ControlService.DestroySession:input_type -> loka.api.v1.DestroySessionRequest
+	5,  // 30: loka.api.v1.ControlService.PauseSession:input_type -> loka.api.v1.PauseSessionRequest
+	6,  // 31: loka.api.v1.ControlService.ResumeSession:input_type -> loka.api.v1.ResumeSessionRequest
+	7,  // 32: loka.api.v1.ControlService.SetSessionMode:input_type -> loka.api.v1.SetSessionModeRequest
+	8,  // 33: loka.api.v1.ControlService.Exec:input_type -> loka.api.v1.ExecRequest
+	9,  // 34: loka.api.v1.ControlService.GetExecution:input_type -> loka.api.v1.GetExecutionRequest
+	10, // 35: loka.api.v1.ControlService.ListExecutions:input_type -> loka.api.v1.ListExecutionsRequest
+	12, // 36: loka.api.v1.ControlService.CancelExecution:input_type -> loka.api.v1.CancelExecutionRequest
+	13, // 37: loka.api.v1.ControlService.StreamExecOutput:input_type -> loka.api.v1.StreamExecOutputRequest
+	15, // 38: loka.api.v1.ControlService.CreateCheckpoint:input_type -> loka.api.v1.CreateCheckpointRequest
+	16, // 39: loka.api.v1.ControlService.GetCheckpoint:input_type -> loka.api.v1.GetCheckpointRequest
+	17, // 40: loka.api.v1.ControlService.ListCheckpoints:input_type -> loka.api.v1.ListCheckpointsRequest
+	18, // 41: loka.api.v1.ControlService.RestoreCheckpoint:input_type -> loka.api.v1.RestoreCheckpointRequest
+	19, // 42: loka.api.v1.ControlService.DeleteCheckpoint:input_type -> loka.api.v1.DeleteCheckpointRequest
+	20, // 43: loka.api.v1.ControlService.InstallPackage:input_type -> loka.api.v1.InstallPackageRequest
+	21, // 44: loka.api.v1.ControlService.ListPackages:input_type -> loka.api.v1.ListPackagesRequest
+	23, // 45: loka.api.v1.ControlService.ValidatePackages:input_type -> loka.api.v1.ValidatePackagesRequest
+	25, // 46: loka.api.v1.ControlService.CreateProfile:input_type -> loka.api.v1.CreateProfileRequest
+	26, // 47: loka.api.v1.ControlService.GetProfile:input_type -> loka.api.v1.GetProfileRequest
+	27, // 48: loka.api.v1.ControlService.ListProfiles:input_type -> loka.api.v1.ListProfilesRequest
+	29, // 49: loka.api.v1.ControlService.UpdateProfile:input_type -> loka.api.v1.UpdateProfileRequest
+	30, // 50: loka.api.v1.ControlService.DeleteProfile:input_type -> loka.api.v1.DeleteProfileRequest
+	31, // 51: loka.api.v1.ControlService.ListWorkers:input_type -> loka.api.v1.ListWorkersRequest
+	33, // 52: loka.api.v1.ControlService.GetWorker:input_type -> loka.api.v1.GetWorkerRequest
+	34, // 53: loka.api.v1.ControlService.DrainWorker:input_type -> loka.api.v1.DrainWorkerRequest
+	35, // 54: loka.api.v1.ControlService.RemoveWorker:input_type -> loka.api.v1.RemoveWorkerRequest
+	36, // 55: loka.api.v1.ControlService.FileTunnel:input_type -> loka.api.v1.FileTunnelMessage
+	53, // 56: loka.api.v1.ControlService.CreateSession:output_type -> loka.api.v1.Session
+	53, // 57: loka.api.v1.ControlService.GetSession:output_type -> loka.api.v1.Session
+	3,  // 58: loka.api.v1.ControlService.ListSessions:output_type -> loka.api.v1.ListSessionsResponse
+	62, // 59: loka.api.v1.ControlService.DestroySession:output_type -> google.protobuf.Empty
+	53, // 60: loka.api.v1.ControlService.PauseSession:output_type -> loka.api.v1.Session
+	53, // 61: loka.api.v1.ControlService.ResumeSession:output_type -> loka.api.v1.Session
+	53, // 62: loka.api.v1.ControlService.SetSessionMode:output_type -> loka.api.v1.Session
+	56, // 63: loka.api.v1.ControlService.Exec:output_type -> loka.api.v1.Execution
+	56, // 64: loka.api.v1.ControlService.GetExecution:output_type -> loka.api.v1.Execution
+	11, // 65: loka.api.v1.ControlService.ListExecutions:output_type -> loka.api.v1.ListExecutionsResponse
+	56, // 66: loka.api.v1.ControlService.CancelExecution:output_type -> loka.api.v1.Execution
+	14, // 67: loka.api.v1.ControlService.StreamExecOutput:output_type -> loka.api.v1.OutputChunk
+	63, // 68: loka.api.v1.ControlService.CreateCheckpoint:output_type -> loka.api.v1.Checkpoint
+	63, // 69: loka.api.v1.ControlService.GetCheckpoint:output_type -> loka.api.v1.Checkpoint
+	64, // 70: loka.api.v1.ControlService.ListCheckpoints:output_type -> loka.api.v1.CheckpointDAG
+	53, // 71: loka.api.v1.ControlService.RestoreCheckpoint:output_type -> loka.api.v1.Session
+	62, // 72: loka.api.v1.ControlService.DeleteCheckpoint:output_type -> google.protobuf.Empty
+	58, // 73: loka.api.v1.ControlService.InstallPackage:output_type -> loka.api.v1.Package
+	22, // 74: loka.api.v1.ControlService.ListPackages:output_type -> loka.api.v1.ListPackagesResponse
+	24, // 75: loka.api.v1.ControlService.ValidatePackages:output_type -> loka.api.v1.ValidatePackagesResponse
+	59, // 76: loka.api.v1.ControlService.CreateProfile:output_type -> loka.api.v1.PackageProfile
+	59, // 77: loka.api.v1.ControlService.GetProfile:output_type -> loka.api.v1.PackageProfile
+	28, // 78: loka.api.v1.ControlService.ListProfiles:output_type -> loka.api.v1.ListProfilesResponse
+	59, // 79: loka.api.v1.ControlService.UpdateProfile:output_type -> loka.api.v1.PackageProfile
+	62, // 80: loka.api.v1.ControlService.DeleteProfile:output_type -> google.protobuf.Empty
+	32, // 81: loka.api.v1.ControlService.ListWorkers:output_type -> loka.api.v1.ListWorkersResponse
+	61, // 82: loka.api.v1.ControlService.GetWorker:output_type -> loka.api.v1.Worker
+	61, // 83: loka.api.v1.ControlService.DrainWorker:output_type -> loka.api.v1.Worker
+	62, // 84: loka.api.v1.ControlService.RemoveWorker:output_type -> google.protobuf.Empty
+	36, // 85: loka.api.v1.ControlService.FileTunnel:output_type -> loka.api.v1.FileTunnelMessage
+	56, // [56:86] is the sub-list for method output_type
+	26, // [26:56] is the sub-list for method input_type
+	26, // [26:26] is the sub-list for extension type_name
+	26, // [26:26] is the sub-list for extension extendee
+	0,  // [0:26] is the sub-list for field type_name
 }
 
 func init() { file_control_proto_init() }
@@ -2255,13 +3187,25 @@ func file_control_proto_init() {
 		return
 	}
 	file_types_proto_init()
+	file_control_proto_msgTypes[36].OneofWrappers = []any{
+		(*FileTunnelMessage_Init)(nil),
+		(*FileTunnelMessage_ReadReq)(nil),
+		(*FileTunnelMessage_ReadResp)(nil),
+		(*FileTunnelMessage_WriteReq)(nil),
+		(*FileTunnelMessage_WriteResp)(nil),
+		(*FileTunnelMessage_ListReq)(nil),
+		(*FileTunnelMessage_ListResp)(nil),
+		(*FileTunnelMessage_StatReq)(nil),
+		(*FileTunnelMessage_StatResp)(nil),
+		(*FileTunnelMessage_Error)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_control_proto_rawDesc), len(file_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   39,
+			NumMessages:   51,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

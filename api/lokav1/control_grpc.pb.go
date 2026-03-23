@@ -49,6 +49,7 @@ const (
 	ControlService_GetWorker_FullMethodName         = "/loka.api.v1.ControlService/GetWorker"
 	ControlService_DrainWorker_FullMethodName       = "/loka.api.v1.ControlService/DrainWorker"
 	ControlService_RemoveWorker_FullMethodName      = "/loka.api.v1.ControlService/RemoveWorker"
+	ControlService_FileTunnel_FullMethodName        = "/loka.api.v1.ControlService/FileTunnel"
 )
 
 // ControlServiceClient is the client API for ControlService service.
@@ -87,6 +88,10 @@ type ControlServiceClient interface {
 	GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	DrainWorker(ctx context.Context, in *DrainWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	RemoveWorker(ctx context.Context, in *RemoveWorkerRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// ─── File Tunnel ─────────────────────────────────────────
+	// Bidirectional stream for mounting local files into a session.
+	// CLI sends local file data; CP relays to the worker VM.
+	FileTunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[FileTunnelMessage, FileTunnelMessage], error)
 }
 
 type controlServiceClient struct {
@@ -396,6 +401,19 @@ func (c *controlServiceClient) RemoveWorker(ctx context.Context, in *RemoveWorke
 	return out, nil
 }
 
+func (c *controlServiceClient) FileTunnel(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[FileTunnelMessage, FileTunnelMessage], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &ControlService_ServiceDesc.Streams[1], ControlService_FileTunnel_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[FileTunnelMessage, FileTunnelMessage]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_FileTunnelClient = grpc.BidiStreamingClient[FileTunnelMessage, FileTunnelMessage]
+
 // ControlServiceServer is the server API for ControlService service.
 // All implementations must embed UnimplementedControlServiceServer
 // for forward compatibility.
@@ -432,6 +450,10 @@ type ControlServiceServer interface {
 	GetWorker(context.Context, *GetWorkerRequest) (*Worker, error)
 	DrainWorker(context.Context, *DrainWorkerRequest) (*Worker, error)
 	RemoveWorker(context.Context, *RemoveWorkerRequest) (*emptypb.Empty, error)
+	// ─── File Tunnel ─────────────────────────────────────────
+	// Bidirectional stream for mounting local files into a session.
+	// CLI sends local file data; CP relays to the worker VM.
+	FileTunnel(grpc.BidiStreamingServer[FileTunnelMessage, FileTunnelMessage]) error
 	mustEmbedUnimplementedControlServiceServer()
 }
 
@@ -528,6 +550,9 @@ func (UnimplementedControlServiceServer) DrainWorker(context.Context, *DrainWork
 }
 func (UnimplementedControlServiceServer) RemoveWorker(context.Context, *RemoveWorkerRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveWorker not implemented")
+}
+func (UnimplementedControlServiceServer) FileTunnel(grpc.BidiStreamingServer[FileTunnelMessage, FileTunnelMessage]) error {
+	return status.Error(codes.Unimplemented, "method FileTunnel not implemented")
 }
 func (UnimplementedControlServiceServer) mustEmbedUnimplementedControlServiceServer() {}
 func (UnimplementedControlServiceServer) testEmbeddedByValue()                        {}
@@ -1065,6 +1090,13 @@ func _ControlService_RemoveWorker_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _ControlService_FileTunnel_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ControlServiceServer).FileTunnel(&grpc.GenericServerStream[FileTunnelMessage, FileTunnelMessage]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type ControlService_FileTunnelServer = grpc.BidiStreamingServer[FileTunnelMessage, FileTunnelMessage]
+
 // ControlService_ServiceDesc is the grpc.ServiceDesc for ControlService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1190,6 +1222,12 @@ var ControlService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "StreamExecOutput",
 			Handler:       _ControlService_StreamExecOutput_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "FileTunnel",
+			Handler:       _ControlService_FileTunnel_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "control.proto",

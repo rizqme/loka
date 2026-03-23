@@ -57,6 +57,11 @@ service ControlService {
   rpc GetWorker(GetWorkerRequest) returns (Worker);
   rpc DrainWorker(DrainWorkerRequest) returns (Worker);
   rpc RemoveWorker(RemoveWorkerRequest) returns (google.protobuf.Empty);
+
+  // ─── File Tunnel ─────────────────────────────────────────
+  // Bidirectional stream for mounting local files into a session.
+  // CLI sends local file data; CP relays to the worker VM.
+  rpc FileTunnel(stream FileTunnelMessage) returns (stream FileTunnelMessage);
 }
 
 // ─── Session messages ──────────────────────────────────────
@@ -251,4 +256,85 @@ message DrainWorkerRequest {
 message RemoveWorkerRequest {
   string id   = 1;
   bool force  = 2;
+}
+
+// ─── File tunnel messages ───────────────────────────────────
+
+message FileTunnelMessage {
+  string session_id = 1;
+
+  oneof payload {
+    TunnelInit init          = 2;  // First message: set up the tunnel.
+    TunnelReadReq read_req   = 3;  // VM wants to read a file.
+    TunnelReadResp read_resp = 4;  // CLI responds with file content.
+    TunnelWriteReq write_req = 5;  // VM wants to write a file.
+    TunnelWriteResp write_resp = 6; // CLI confirms write.
+    TunnelListReq list_req   = 7;  // VM wants to list a directory.
+    TunnelListResp list_resp = 8;  // CLI responds with directory listing.
+    TunnelStatReq stat_req   = 9;  // VM wants file metadata.
+    TunnelStatResp stat_resp = 10; // CLI responds with stat.
+    TunnelError error        = 11; // Error from either side.
+  }
+}
+
+message TunnelInit {
+  string local_path  = 1; // Local directory on the CLI machine.
+  string mount_path  = 2; // Where it appears in the VM.
+  bool read_only     = 3;
+}
+
+message TunnelReadReq {
+  string path   = 1; // Relative path within the mount.
+  int64 offset  = 2;
+  int64 length  = 3;
+}
+
+message TunnelReadResp {
+  bytes data  = 1;
+  bool eof    = 2;
+}
+
+message TunnelWriteReq {
+  string path   = 1;
+  bytes data    = 2;
+  int64 offset  = 3;
+  bool truncate = 4; // Truncate file before writing.
+}
+
+message TunnelWriteResp {
+  int64 bytes_written = 1;
+}
+
+message TunnelListReq {
+  string path = 1; // Relative directory path.
+}
+
+message TunnelListResp {
+  repeated TunnelDirEntry entries = 1;
+}
+
+message TunnelDirEntry {
+  string name   = 1;
+  bool is_dir   = 2;
+  int64 size    = 3;
+  int64 mode    = 4;
+  int64 mod_time = 5; // Unix timestamp.
+}
+
+message TunnelStatReq {
+  string path = 1;
+}
+
+message TunnelStatResp {
+  string name    = 1;
+  bool is_dir    = 2;
+  int64 size     = 3;
+  int64 mode     = 4;
+  int64 mod_time = 5;
+  bool exists    = 6;
+}
+
+message TunnelError {
+  string message = 1;
+  string path    = 2;
 }

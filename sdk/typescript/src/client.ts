@@ -50,6 +50,17 @@ export class LokaClient {
     return this.post(`/api/v1/sessions/${sessionId}/sync`, opts);
   }
 
+  /**
+   * Mount a local directory into a session via gRPC tunnel.
+   * Requires gRPC streaming — use the CLI for this:
+   *   loka session mount <id> <local-path> <vm-path>
+   */
+  async mountLocal(_sessionId: string, _localPath: string, _vmPath: string, _opts?: { readOnly?: boolean }): Promise<void> {
+    throw new Error(
+      'mountLocal requires gRPC streaming. Use the CLI: loka session mount <id> <local-path> <vm-path>'
+    );
+  }
+
   async pauseSession(id: string): Promise<Session> {
     return this.post(`/api/v1/sessions/${id}/pause`, {});
   }

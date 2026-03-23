@@ -105,6 +105,7 @@ func (s *Server) routes() {
 		// Storage sync
 		r.Post("/sessions/{id}/sync", s.syncMount)
 
+
 		// Sessions - migration
 		r.Post("/sessions/{id}/migrate", s.migrateSession)
 
