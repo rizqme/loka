@@ -50,9 +50,9 @@ setup_sudo() {
     fi
     SUDO="sudo"
     # Keep sudo alive for the duration of the script.
-    (while true; do sudo -n true; sleep 50; done) &
+    (while true; do sudo -n true 2>/dev/null; sleep 50; done) &
     SUDO_KEEPALIVE_PID=$!
-    trap "kill $SUDO_KEEPALIVE_PID 2>/dev/null; rm -rf ${_CLEANUP_TMP:-/dev/null}" EXIT
+    trap 'kill $SUDO_KEEPALIVE_PID 2>/dev/null; wait $SUDO_KEEPALIVE_PID 2>/dev/null' EXIT
   else
     fail "sudo is required but not found. Run as root instead."
   fi
