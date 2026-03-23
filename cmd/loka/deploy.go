@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 	"text/tabwriter"
 
@@ -29,6 +30,7 @@ Examples:
 		newDeployCloudCmd("digitalocean", "Deploy to DigitalOcean (Droplets)", deployDigitalOcean),
 		newDeployCloudCmd("ovh", "Deploy to OVH (Bare Metal)", deployOVH),
 		newDeployLocalCmd(),
+		newDeployDownCmd(),
 		newDeployStatusCmd(),
 		newDeployDestroyCmd(),
 	)
@@ -74,25 +76,76 @@ func newDeployCloudCmd(provider, description string, fn deployFunc) *cobra.Comma
 // ── Local deploy ────────────────────────────────────────
 
 func newDeployLocalCmd() *cobra.Command {
-	return &cobra.Command{
+	var foreground bool
+
+	cmd := &cobra.Command{
 		Use:   "local",
-		Short: "Deploy LOKA locally (single node)",
+		Short: "Start LOKA locally (single node)",
+		Long:  "Starts lokad with an embedded worker, SQLite, and local object store.",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			fmt.Println("Deploying LOKA locally...")
-			fmt.Println("")
-			fmt.Println("  1. Starting lokad with embedded worker")
-			fmt.Println("  2. Database: SQLite")
-			fmt.Println("  3. Listening on :8080")
-			fmt.Println("")
-			fmt.Println("Run:")
-			fmt.Println("  lokad")
-			fmt.Println("")
-			fmt.Println("Or with the install script:")
-			fmt.Println("  curl -fsSL https://rizqme.github.io/loka/install.sh | bash")
-			fmt.Println("  lokad")
+			lokadPath, err := findBinary("lokad")
+			if err != nil {
+				return err
+			}
+
+			if foreground {
+				fmt.Println("Starting LOKA (foreground)...")
+				proc := exec.Command(lokadPath)
+				proc.Env = os.Environ()
+				proc.Stdout = os.Stdout
+				proc.Stderr = os.Stderr
+				proc.Stdin = os.Stdin
+				return proc.Run()
+			}
+
+			// Background.
+			proc := exec.Command(lokadPath)
+			proc.Env = os.Environ()
+			if err := proc.Start(); err != nil {
+				return fmt.Errorf("failed to start lokad: %w", err)
+			}
+
+			fmt.Printf("LOKA started (pid %d)\n", proc.Process.Pid)
+			fmt.Printf("  API:  http://localhost:8080\n")
+			fmt.Printf("  Stop: loka deploy down\n")
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVarP(&foreground, "foreground", "f", false, "Run in foreground")
+	return cmd
+}
+
+func newDeployDownCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "down",
+		Short: "Stop a locally running LOKA daemon",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out, err := exec.Command("pgrep", "-f", "lokad").Output()
+			if err != nil {
+				fmt.Println("LOKA is not running")
+				return nil
+			}
+			pid := strings.TrimSpace(string(out))
+			if err := exec.Command("kill", pid).Run(); err != nil {
+				return fmt.Errorf("failed to stop (pid %s): %w", pid, err)
+			}
+			fmt.Printf("LOKA stopped (pid %s)\n", pid)
+			return nil
+		},
+	}
+}
+
+func findBinary(name string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	for _, p := range []string{"./bin/" + name, "/usr/local/bin/" + name} {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("%s not found — install with: curl -fsSL https://rizqme.github.io/loka/install.sh | bash", name)
 }
 
 // ── Status ──────────────────────────────────────────────
