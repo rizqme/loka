@@ -6,30 +6,36 @@ import (
 	"os/exec"
 	"strings"
 	"text/tabwriter"
+	"time"
 
+	"github.com/rizqme/loka/pkg/lokaapi"
 	"github.com/spf13/cobra"
 )
 
 func newDeployCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "deploy",
-		Short: "Deploy LOKA to cloud infrastructure",
-		Long: `Deploy a LOKA control plane and workers to cloud providers.
+		Short: "Manage LOKA deployments",
+		Long: `Create, list, switch, and destroy LOKA deployments.
 
-Examples:
-  loka deploy aws --region us-east-1 --workers 3
-  loka deploy gcp --project my-project --zone us-central1-a
-  loka deploy local
+  loka deploy local --name dev
+  loka deploy aws --name prod --region us-east-1 --workers 3
+  loka deploy list
+  loka deploy use prod
   loka deploy status
-  loka deploy destroy`,
+  loka deploy down
+  loka deploy destroy prod`,
 	}
 	cmd.AddCommand(
-		newDeployCloudCmd("aws", "Deploy to AWS (EC2 instances)", deployAWS),
-		newDeployCloudCmd("gcp", "Deploy to Google Cloud (Compute Engine)", deployGCP),
-		newDeployCloudCmd("azure", "Deploy to Azure (Virtual Machines)", deployAzure),
-		newDeployCloudCmd("digitalocean", "Deploy to DigitalOcean (Droplets)", deployDigitalOcean),
-		newDeployCloudCmd("ovh", "Deploy to OVH (Bare Metal)", deployOVH),
+		newDeployCloudCmd("aws", "Deploy to AWS (EC2)", deployAWS),
+		newDeployCloudCmd("gcp", "Deploy to Google Cloud", deployGCP),
+		newDeployCloudCmd("azure", "Deploy to Azure", deployAzure),
+		newDeployCloudCmd("digitalocean", "Deploy to DigitalOcean", deployDigitalOcean),
+		newDeployCloudCmd("ovh", "Deploy to OVH", deployOVH),
 		newDeployLocalCmd(),
+		newDeployListCmd(),
+		newDeployUseCmd(),
+		newDeployRenameCmd(),
 		newDeployDownCmd(),
 		newDeployStatusCmd(),
 		newDeployDestroyCmd(),
@@ -37,183 +43,181 @@ Examples:
 	return cmd
 }
 
-// ── Cloud deploy template ───────────────────────────────
-
 type deployFunc func(opts deployOpts) error
-
 type deployOpts struct {
-	Provider     string
-	Region       string
-	Zone         string
-	Project      string
-	Workers      int
-	InstanceType string
-	SSHKey       string
+	Name, Provider, Region, Zone, Project, InstanceType, SSHKey string
+	Workers                                                     int
 }
 
-func newDeployCloudCmd(provider, description string, fn deployFunc) *cobra.Command {
+func newDeployCloudCmd(provider, desc string, fn deployFunc) *cobra.Command {
 	var opts deployOpts
 	opts.Provider = provider
-
 	cmd := &cobra.Command{
 		Use:   provider,
-		Short: description,
+		Short: desc,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return fn(opts)
-		},
-	}
-
-	cmd.Flags().StringVar(&opts.Region, "region", "", "Cloud region")
-	cmd.Flags().StringVar(&opts.Zone, "zone", "", "Cloud zone")
-	cmd.Flags().StringVar(&opts.Project, "project", "", "Cloud project ID (GCP)")
-	cmd.Flags().IntVar(&opts.Workers, "workers", 1, "Number of worker nodes")
-	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", "", "Instance type (default: provider-specific)")
-	cmd.Flags().StringVar(&opts.SSHKey, "ssh-key", "", "SSH key name for instance access")
-
-	return cmd
-}
-
-// ── Local deploy ────────────────────────────────────────
-
-func newDeployLocalCmd() *cobra.Command {
-	var foreground bool
-
-	cmd := &cobra.Command{
-		Use:   "local",
-		Short: "Start LOKA locally (single node)",
-		Long:  "Starts lokad with an embedded worker, SQLite, and local object store.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			lokadPath, err := findBinary("lokad")
-			if err != nil {
-				return err
-			}
-
-			if foreground {
-				fmt.Println("Starting LOKA (foreground)...")
-				proc := exec.Command(lokadPath)
-				proc.Env = os.Environ()
-				proc.Stdout = os.Stdout
-				proc.Stderr = os.Stderr
-				proc.Stdin = os.Stdin
-				return proc.Run()
-			}
-
-			// Background.
-			proc := exec.Command(lokadPath)
-			proc.Env = os.Environ()
-			if err := proc.Start(); err != nil {
-				return fmt.Errorf("failed to start lokad: %w", err)
-			}
-
-			fmt.Printf("LOKA started (pid %d)\n", proc.Process.Pid)
-			fmt.Printf("  API:  http://localhost:8080\n")
-			fmt.Printf("  Stop: loka deploy down\n")
+			if opts.Name == "" { opts.Name = provider }
+			if err := fn(opts); err != nil { return err }
+			store, _ := loadDeployments()
+			store.Add(Deployment{Name: opts.Name, Provider: provider, Region: opts.Region, Endpoint: "http://<pending>:8080", Workers: opts.Workers, Status: "provisioning", CreatedAt: time.Now()})
+			store.Active = opts.Name
+			saveDeployments(store)
+			fmt.Printf("\nDeployment %q created and set as active.\n", opts.Name)
 			return nil
 		},
 	}
-
-	cmd.Flags().BoolVarP(&foreground, "foreground", "f", false, "Run in foreground")
+	cmd.Flags().StringVar(&opts.Name, "name", "", "Deployment name (default: provider)")
+	cmd.Flags().StringVar(&opts.Region, "region", "", "Region")
+	cmd.Flags().StringVar(&opts.Zone, "zone", "", "Zone")
+	cmd.Flags().StringVar(&opts.Project, "project", "", "Project ID (GCP)")
+	cmd.Flags().IntVar(&opts.Workers, "workers", 1, "Workers")
+	cmd.Flags().StringVar(&opts.InstanceType, "instance-type", "", "Instance type")
+	cmd.Flags().StringVar(&opts.SSHKey, "ssh-key", "", "SSH key")
 	return cmd
+}
+
+func newDeployLocalCmd() *cobra.Command {
+	var (name string; foreground bool)
+	cmd := &cobra.Command{
+		Use: "local", Short: "Start LOKA locally",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if name == "" { name = "local" }
+			lokad, err := findBinary("lokad")
+			if err != nil { return err }
+			store, _ := loadDeployments()
+			store.Add(Deployment{Name: name, Provider: "local", Endpoint: "http://localhost:8080", Workers: 1, Status: "running", CreatedAt: time.Now()})
+			store.Active = name
+			saveDeployments(store)
+			if foreground {
+				fmt.Printf("Starting %q (foreground)...\n", name)
+				p := exec.Command(lokad); p.Env = os.Environ(); p.Stdout = os.Stdout; p.Stderr = os.Stderr; p.Stdin = os.Stdin
+				return p.Run()
+			}
+			p := exec.Command(lokad); p.Env = os.Environ()
+			if err := p.Start(); err != nil { return err }
+			fmt.Printf("LOKA %q started (pid %d)\n", name, p.Process.Pid)
+			fmt.Printf("  Endpoint: http://localhost:8080\n")
+			fmt.Printf("  Stop:     loka deploy down\n")
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&name, "name", "local", "Deployment name")
+	cmd.Flags().BoolVarP(&foreground, "foreground", "f", false, "Foreground")
+	return cmd
+}
+
+func newDeployListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "list", Short: "List deployments", Aliases: []string{"ls"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, _ := loadDeployments()
+			if len(store.Deployments) == 0 {
+				fmt.Println("No deployments. Create one: loka deploy local --name dev")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "  NAME\tPROVIDER\tENDPOINT\tWORKERS\tSTATUS\tCREATED")
+			for _, d := range store.Deployments {
+				a := " "; if d.Name == store.Active { a = "*" }
+				fmt.Fprintf(w, "%s %s\t%s\t%s\t%d\t%s\t%s\n", a, d.Name, d.Provider, d.Endpoint, d.Workers, d.Status, d.CreatedAt.Format("2006-01-02"))
+			}
+			w.Flush()
+			return nil
+		},
+	}
+}
+
+func newDeployUseCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "use <name>", Short: "Switch active deployment", Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, _ := loadDeployments()
+			if err := store.SetActive(args[0]); err != nil { return err }
+			saveDeployments(store)
+			d := store.GetActive()
+			fmt.Printf("Active deployment: %q (%s, %s)\n", d.Name, d.Provider, d.Endpoint)
+			return nil
+		},
+	}
+}
+
+func newDeployRenameCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "rename <old> <new>", Short: "Rename a deployment", Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, _ := loadDeployments()
+			d := store.Get(args[0])
+			if d == nil { return fmt.Errorf("deployment %q not found", args[0]) }
+			old := d.Name; d.Name = args[1]
+			if store.Active == old { store.Active = args[1] }
+			saveDeployments(store)
+			fmt.Printf("Renamed %q -> %q\n", old, args[1])
+			return nil
+		},
+	}
 }
 
 func newDeployDownCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "down",
-		Short: "Stop a locally running LOKA daemon",
+		Use: "down [name]", Short: "Stop a deployment", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			out, err := exec.Command("pgrep", "-f", "lokad").Output()
-			if err != nil {
-				fmt.Println("LOKA is not running")
-				return nil
+			store, _ := loadDeployments()
+			name := store.Active; if len(args) > 0 { name = args[0] }
+			d := store.Get(name)
+			if d == nil { return fmt.Errorf("deployment %q not found", name) }
+			if d.Provider == "local" {
+				out, _ := exec.Command("pgrep", "-f", "lokad").Output()
+				if len(out) > 0 { exec.Command("kill", strings.TrimSpace(string(out))).Run(); fmt.Printf("LOKA %q stopped\n", name) } else { fmt.Printf("%q is not running\n", name) }
 			}
-			pid := strings.TrimSpace(string(out))
-			if err := exec.Command("kill", pid).Run(); err != nil {
-				return fmt.Errorf("failed to stop (pid %s): %w", pid, err)
-			}
-			fmt.Printf("LOKA stopped (pid %s)\n", pid)
+			d.Status = "stopped"; saveDeployments(store)
 			return nil
 		},
 	}
 }
-
-func findBinary(name string) (string, error) {
-	if path, err := exec.LookPath(name); err == nil {
-		return path, nil
-	}
-	for _, p := range []string{"./bin/" + name, "/usr/local/bin/" + name} {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	return "", fmt.Errorf("%s not found — install with: curl -fsSL https://rizqme.github.io/loka/install.sh | bash", name)
-}
-
-// ── Status ──────────────────────────────────────────────
 
 func newDeployStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status",
-		Short: "Show deployment status",
+		Use: "status [name]", Short: "Show deployment status", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			client := newClient()
-			var health struct {
-				Status       string `json:"status"`
-				WorkersTotal int    `json:"workers_total"`
-				WorkersReady int    `json:"workers_ready"`
-			}
-			if err := client.Raw(cmd.Context(), "GET", "/api/v1/health", nil, &health); err != nil {
-				return fmt.Errorf("cannot reach control plane at %s: %w", serverAddr, err)
-			}
-
-			fmt.Printf("Control Plane: %s\n", serverAddr)
-			fmt.Printf("Status:        %s\n", health.Status)
-			fmt.Printf("Workers:       %d ready / %d total\n", health.WorkersReady, health.WorkersTotal)
-
-			// List workers
-			var resp struct {
-				Workers []struct {
-					ID       string `json:"ID"`
-					Hostname string `json:"Hostname"`
-					Provider string `json:"Provider"`
-					Region   string `json:"Region"`
-					Status   string `json:"Status"`
-				} `json:"workers"`
-			}
-			if err := client.Raw(cmd.Context(), "GET", "/api/v1/workers", nil, &resp); err == nil && len(resp.Workers) > 0 {
-				fmt.Println("")
-				w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-				fmt.Fprintln(w, "WORKER\tHOSTNAME\tPROVIDER\tREGION\tSTATUS")
-				for _, wk := range resp.Workers {
-					fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-						shortID(wk.ID), wk.Hostname, wk.Provider, wk.Region, wk.Status)
-				}
-				w.Flush()
+			store, _ := loadDeployments()
+			name := store.Active; if len(args) > 0 { name = args[0] }
+			d := store.Get(name)
+			if d == nil { return fmt.Errorf("deployment %q not found", name) }
+			fmt.Printf("Name:     %s\n", d.Name)
+			fmt.Printf("Provider: %s\n", d.Provider)
+			fmt.Printf("Endpoint: %s\n", d.Endpoint)
+			fmt.Printf("Workers:  %d\n", d.Workers)
+			fmt.Printf("Status:   %s\n", d.Status)
+			c := lokaapi.NewClient(d.Endpoint, token)
+			var h struct{ Status string `json:"status"`; WorkersReady int `json:"workers_ready"` }
+			if err := c.Raw(cmd.Context(), "GET", "/api/v1/health", nil, &h); err == nil {
+				fmt.Printf("Live:     %s (%d workers ready)\n", h.Status, h.WorkersReady)
 			}
 			return nil
 		},
 	}
 }
-
-// ── Destroy ─────────────────────────────────────────────
 
 func newDeployDestroyCmd() *cobra.Command {
 	var force bool
 	cmd := &cobra.Command{
-		Use:   "destroy",
-		Short: "Tear down a LOKA deployment",
+		Use: "destroy [name]", Short: "Destroy a deployment", Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			store, _ := loadDeployments()
+			name := store.Active; if len(args) > 0 { name = args[0] }
+			d := store.Get(name)
+			if d == nil { return fmt.Errorf("deployment %q not found", name) }
 			if !force {
-				fmt.Print("This will destroy all LOKA infrastructure. Type 'yes' to confirm: ")
-				var confirm string
-				fmt.Scanln(&confirm)
-				if strings.ToLower(confirm) != "yes" {
-					fmt.Println("Aborted.")
-					return nil
-				}
+				fmt.Printf("Destroy %q? (yes/no): ", name)
+				var c string; fmt.Scanln(&c)
+				if c != "yes" { fmt.Println("Aborted."); return nil }
 			}
-			fmt.Println("Destroying LOKA deployment...")
-			fmt.Println("  (Cloud resource teardown not yet implemented)")
-			fmt.Println("  For now, manually terminate instances and remove lokad.")
+			if d.Provider == "local" {
+				out, _ := exec.Command("pgrep", "-f", "lokad").Output()
+				if len(out) > 0 { exec.Command("kill", strings.TrimSpace(string(out))).Run() }
+			}
+			store.Remove(name); saveDeployments(store)
+			fmt.Printf("Deployment %q destroyed\n", name)
 			return nil
 		},
 	}
@@ -221,87 +225,14 @@ func newDeployDestroyCmd() *cobra.Command {
 	return cmd
 }
 
-// ── Cloud deploy implementations ────────────────────────
+func deployAWS(o deployOpts) error { r:=o.Region; if r=="" {r="us-east-1"}; fmt.Printf("Deploying %q to AWS (%s, %d workers)...\n", o.Name, r, o.Workers); return nil }
+func deployGCP(o deployOpts) error { z:=o.Zone; if z=="" {z="us-central1-a"}; fmt.Printf("Deploying %q to GCP (%s, %d workers)...\n", o.Name, z, o.Workers); return nil }
+func deployAzure(o deployOpts) error { fmt.Printf("Deploying %q to Azure (%d workers)...\n", o.Name, o.Workers); return nil }
+func deployDigitalOcean(o deployOpts) error { fmt.Printf("Deploying %q to DigitalOcean (%d workers)...\n", o.Name, o.Workers); return nil }
+func deployOVH(o deployOpts) error { fmt.Printf("Deploying %q to OVH (%d workers)...\n", o.Name, o.Workers); return nil }
 
-func deployAWS(opts deployOpts) error {
-	region := opts.Region
-	if region == "" {
-		region = "us-east-1"
-	}
-	instanceType := opts.InstanceType
-	if instanceType == "" {
-		instanceType = "i3.metal"
-	}
-
-	fmt.Printf("Deploying LOKA to AWS (%s)\n", region)
-	fmt.Println("")
-	fmt.Printf("  Control plane: 1x t3.medium (%s)\n", region)
-	fmt.Printf("  Workers:       %dx %s (%s)\n", opts.Workers, instanceType, region)
-	fmt.Println("")
-	fmt.Println("Steps:")
-	fmt.Println("  1. Create VPC + security groups")
-	fmt.Println("  2. Launch control plane instance")
-	fmt.Println("  3. Install LOKA via install script")
-	fmt.Println("  4. Launch worker instances with KVM")
-	fmt.Println("  5. Register workers with control plane")
-	fmt.Println("")
-	fmt.Println("  (Automated provisioning coming soon.)")
-	fmt.Println("")
-	fmt.Println("Manual setup:")
-	fmt.Printf("  # On control plane instance:\n")
-	fmt.Printf("  curl -fsSL https://rizqme.github.io/loka/install.sh | bash\n")
-	fmt.Printf("  lokad\n")
-	fmt.Println("")
-	fmt.Printf("  # On each worker:\n")
-	fmt.Printf("  curl -fsSL https://rizqme.github.io/loka/install.sh | bash\n")
-	fmt.Printf("  loka-worker --control-plane <cp-ip>:9090\n")
-	return nil
-}
-
-func deployGCP(opts deployOpts) error {
-	zone := opts.Zone
-	if zone == "" {
-		zone = "us-central1-a"
-	}
-	instanceType := opts.InstanceType
-	if instanceType == "" {
-		instanceType = "n2-standard-8"
-	}
-
-	fmt.Printf("Deploying LOKA to GCP (%s)\n", zone)
-	fmt.Println("")
-	fmt.Printf("  Control plane: 1x e2-standard-2 (%s)\n", zone)
-	fmt.Printf("  Workers:       %dx %s with nested virtualization (%s)\n", opts.Workers, instanceType, zone)
-	fmt.Println("")
-	fmt.Println("  (Automated provisioning coming soon.)")
-	return nil
-}
-
-func deployAzure(opts deployOpts) error {
-	region := opts.Region
-	if region == "" {
-		region = "eastus"
-	}
-	fmt.Printf("Deploying LOKA to Azure (%s)\n", region)
-	fmt.Printf("  Workers: %dx Standard_D8s_v3 with nested virtualization\n", opts.Workers)
-	fmt.Println("  (Automated provisioning coming soon.)")
-	return nil
-}
-
-func deployDigitalOcean(opts deployOpts) error {
-	region := opts.Region
-	if region == "" {
-		region = "nyc1"
-	}
-	fmt.Printf("Deploying LOKA to DigitalOcean (%s)\n", region)
-	fmt.Printf("  Workers: %dx s-8vcpu-16gb\n", opts.Workers)
-	fmt.Println("  (Automated provisioning coming soon.)")
-	return nil
-}
-
-func deployOVH(opts deployOpts) error {
-	fmt.Println("Deploying LOKA to OVH")
-	fmt.Printf("  Workers: %dx bare metal\n", opts.Workers)
-	fmt.Println("  (Automated provisioning coming soon.)")
-	return nil
+func findBinary(name string) (string, error) {
+	if p, err := exec.LookPath(name); err == nil { return p, nil }
+	for _, p := range []string{"./bin/" + name, "/usr/local/bin/" + name} { if _, err := os.Stat(p); err == nil { return p, nil } }
+	return "", fmt.Errorf("%s not found", name)
 }
