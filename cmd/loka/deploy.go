@@ -166,28 +166,63 @@ func deployLocalMacOS(name string, foreground bool) error {
 		}
 	}
 
-	// Save deployment.
-	store, _ := loadDeployments()
-	store.Add(Deployment{
-		Name: name, Provider: "local", Endpoint: "http://localhost:6840",
-		Workers: 1, Status: "running", CreatedAt: time.Now(),
-		Meta: map[string]string{"runtime": "lima"},
-	})
-	store.Active = name
-	saveDeployments(store)
-
 	// Start lokad inside Lima.
 	fmt.Printf("Starting LOKA in Lima VM...\n")
+
+	// Kill any existing lokad first.
+	exec.Command(limactl, "shell", "loka", "pkill", "-f", "lokad").Run()
+
 	if foreground {
-		p := exec.Command(limactl, "shell", "loka", "lokad")
+		// Save deployment before blocking.
+		store, _ := loadDeployments()
+		store.Add(Deployment{
+			Name: name, Provider: "local", Endpoint: "https://localhost:6840",
+			Workers: 0, Status: "running", CreatedAt: time.Now(),
+			Meta: map[string]string{"runtime": "lima", "insecure": "true"},
+		})
+		store.Active = name
+		saveDeployments(store)
+
+		p := exec.Command(limactl, "shell", "loka", "lokad", "--role", "controlplane")
 		p.Stdout = os.Stdout; p.Stderr = os.Stderr; p.Stdin = os.Stdin
 		return p.Run()
 	}
 
-	p := exec.Command(limactl, "shell", "loka", "bash", "-c", "nohup lokad > /var/log/lokad.log 2>&1 &")
+	p := exec.Command(limactl, "shell", "loka", "bash", "-c",
+		"nohup lokad --role controlplane > /tmp/lokad.log 2>&1 &")
 	if err := p.Run(); err != nil {
 		return fmt.Errorf("failed to start lokad in Lima: %w", err)
 	}
+
+	// Wait for the server to be ready.
+	fmt.Print("  Waiting for server...")
+	ready := false
+	for i := 0; i < 10; i++ {
+		out, _ := exec.Command(limactl, "shell", "loka", "curl", "-sk",
+			"https://localhost:6840/api/v1/health").Output()
+		if len(out) > 0 && strings.Contains(string(out), "ok") {
+			ready = true
+			break
+		}
+		fmt.Print(".")
+		exec.Command("sleep", "1").Run()
+	}
+	if ready {
+		fmt.Println(" ready!")
+	} else {
+		fmt.Println(" (may still be starting)")
+	}
+
+	// Save deployment — use https since auto-TLS is on, with insecure flag
+	// since the CA cert is inside the VM and not on the host.
+	store, _ := loadDeployments()
+	store.Add(Deployment{
+		Name: name, Provider: "local", Endpoint: "https://localhost:6840",
+		Workers: 0, Status: "running", CreatedAt: time.Now(),
+		Meta: map[string]string{"runtime": "lima", "insecure": "true"},
+	})
+	store.Active = name
+	saveDeployments(store)
 
 	fmt.Printf("LOKA %q started (Lima VM, ports forwarded to localhost)\n", name)
 	fmt.Printf("  Endpoint: http://localhost:6840\n")

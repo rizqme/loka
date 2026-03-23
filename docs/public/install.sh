@@ -404,7 +404,7 @@ mounts:
   - location: "~"
     writable: true
 
-portForward:
+portForwards:
   - guestPort: 6840
     hostPort: 6840
   - guestPort: 6841
@@ -419,12 +419,12 @@ provision:
       # Enable KVM.
       apt-get update -q
       apt-get install -y -q qemu-kvm curl
-      chmod 666 /dev/kvm
+      [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
 
       # Install Docker.
       if ! command -v docker &>/dev/null; then
         curl -fsSL https://get.docker.com | sh
-        usermod -aG docker "${LIMA_CIDATA_USER}"
+        usermod -aG docker "$(ls /home/ | head -1)" 2>/dev/null || true
       fi
 
       # Install LOKA inside the VM.
