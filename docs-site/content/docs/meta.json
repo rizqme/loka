@@ -2,7 +2,7 @@
   "title": "Docs",
   "defaultOpen": true,
   "pages": [
-    "index",
+    "introduction",
     "installation",
     "---Quickstart---",
     "first-session",
