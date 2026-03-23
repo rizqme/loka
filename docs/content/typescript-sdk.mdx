@@ -1,6 +1,6 @@
 ---
 title: TypeScript SDK
-description: "@vyprai/loka-sdk for TypeScript"
+description: "@vypr-ai/loka-sdk for TypeScript"
 ---
 
 # TypeScript SDK
@@ -10,13 +10,13 @@ Install the Loka TypeScript SDK and use it to manage sessions, run commands, and
 ## Install
 
 ```bash
-npm install @vyprai/loka-sdk
+npm install @vypr-ai/loka-sdk
 ```
 
 ## Connect
 
 ```typescript
-import { LokaClient } from '@vyprai/loka-sdk';
+import { LokaClient } from '@vypr-ai/loka-sdk';
 
 const loka = new LokaClient();                                // uses LOKA_API_URL env var
 const loka = new LokaClient({ url: 'http://localhost:6840' }); // or pass explicitly
@@ -116,7 +116,7 @@ const images = await loka.listImages();
 ## Error handling
 
 ```typescript
-import { LokaError, SessionNotFoundError, CheckpointNotFoundError } from '@vyprai/loka-sdk';
+import { LokaError, SessionNotFoundError, CheckpointNotFoundError } from '@vypr-ai/loka-sdk';
 
 try {
     await loka.restoreCheckpoint(session.id, 'chk_invalid');

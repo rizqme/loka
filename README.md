@@ -10,7 +10,7 @@ curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 
 ```bash
 pip install loka-sdk        # Python
-npm install @vyprai/loka-sdk     # TypeScript
+npm install @vypr-ai/loka-sdk     # TypeScript
 ```
 
 ## How it works
