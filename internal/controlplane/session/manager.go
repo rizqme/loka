@@ -186,7 +186,7 @@ func (m *Manager) WaitForReady(ctx context.Context, sessionID string) (*loka.Ses
 		if err != nil {
 			return nil, err
 		}
-		if s.Ready {
+		if s.Ready || s.Status == loka.SessionStatusRunning {
 			return s, nil
 		}
 		if s.Status == loka.SessionStatusError {

@@ -61,10 +61,10 @@ class LokaClient:
         """
         import time as _time
         sess = self._as(Session, self._post("/api/v1/sessions", kwargs))
-        if not wait or sess.Ready:
+        if not wait or sess.Ready or sess.Status == "running":
             return sess
         deadline = _time.monotonic() + timeout
-        while not sess.Ready and sess.Status != "error":
+        while not sess.Ready and sess.Status not in ("running", "error"):
             if _time.monotonic() > deadline:
                 raise TimeoutError(f"session {sess.ID} not ready after {timeout}s (status: {sess.Status})")
             _time.sleep(0.5)
@@ -174,7 +174,7 @@ class LokaClient:
         import time as _time
         deadline = _time.monotonic() + timeout
         sess = self.get_session(session_id)
-        while not sess.Ready and sess.Status != "error":
+        while not sess.Ready and sess.Status not in ("running", "error"):
             if _time.monotonic() > deadline:
                 raise TimeoutError(f"session {session_id} not ready after {timeout}s (status: {sess.Status})")
             _time.sleep(0.5)

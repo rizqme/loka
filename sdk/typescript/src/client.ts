@@ -26,10 +26,10 @@ export class LokaClient {
     const { wait = true, timeout = 120, ...createOpts } = opts;
     let session: Session = await this.post('/api/v1/sessions', createOpts);
 
-    if (!wait || session.Ready) return session;
+    if (!wait || session.Ready || session.Status === 'running') return session;
 
     const deadline = Date.now() + timeout * 1000;
-    while (!session.Ready && session.Status !== 'error') {
+    while (!session.Ready && session.Status !== 'running' && session.Status !== 'error') {
       if (Date.now() > deadline) {
         throw new Error(`Session ${session.ID} not ready after ${timeout}s (status: ${session.Status})`);
       }
@@ -107,7 +107,7 @@ export class LokaClient {
     const deadline = Date.now() + timeout * 1000;
     while (true) {
       const session = await this.getSession(sessionId);
-      if (session.Ready) return session;
+      if (session.Ready || session.Status === 'running') return session;
       if (session.Status === 'error') {
         throw new Error(`Session failed: ${session.StatusMessage || 'unknown error'}`);
       }

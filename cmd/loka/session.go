@@ -98,14 +98,18 @@ func newSessionCreateCmd() *cobra.Command {
 				return err
 			}
 
-			// Wait for session to be ready (polls until ready or error).
-			if !sess.Ready {
+			// Wait for session to be ready.
+			// A session is ready when status is "running" (or Ready flag is set).
+			isReady := func(s *lokaapi.Session) bool {
+				return s.Ready || s.Status == "running"
+			}
+			if !isReady(sess) {
 				if sess.StatusMessage != "" {
 					fmt.Printf("  %s...", sess.StatusMessage)
 				} else {
 					fmt.Print("  Starting...")
 				}
-				for !sess.Ready && sess.Status != "error" {
+				for !isReady(sess) && sess.Status != "error" {
 					time.Sleep(500 * time.Millisecond)
 					updated, err := client.GetSession(cmd.Context(), sess.ID)
 					if err != nil {
@@ -114,7 +118,7 @@ func newSessionCreateCmd() *cobra.Command {
 					}
 					if updated.StatusMessage != "" && updated.StatusMessage != sess.StatusMessage {
 						fmt.Printf("\n  %s...", updated.StatusMessage)
-					} else {
+					} else if !isReady(updated) {
 						fmt.Print(".")
 					}
 					sess = updated
