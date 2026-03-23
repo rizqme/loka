@@ -183,7 +183,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 		store.Active = name
 		saveDeployments(store)
 
-		p := exec.Command(limactl, "shell", "loka", "lokad", "--role", "controlplane")
+		p := exec.Command(limactl, "shell", "loka", "lokad")
 		p.Stdout = os.Stdout; p.Stderr = os.Stderr; p.Stdin = os.Stdin
 		return p.Run()
 	}
@@ -218,7 +218,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 	store, _ := loadDeployments()
 	store.Add(Deployment{
 		Name: name, Provider: "local", Endpoint: "https://localhost:6840",
-		Workers: 0, Status: "running", CreatedAt: time.Now(),
+		Workers: 1, Status: "running", CreatedAt: time.Now(),
 		Meta: map[string]string{"runtime": "lima", "insecure": "true"},
 	})
 	store.Active = name

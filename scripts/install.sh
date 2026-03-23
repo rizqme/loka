@@ -159,7 +159,7 @@ install_firecracker() {
   local kernel_dir="${DATA_DIR}/kernel"
   $SUDO mkdir -p "$kernel_dir"
 
-  local kernel_url="https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/${fc_arch}/vmlinux-5.10.217"
+  local kernel_url="https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/${fc_arch}/vmlinux-5.10.bin"
   info "Downloading Linux kernel..."
   $SUDO curl -fsSL "$kernel_url" -o "${kernel_dir}/vmlinux"
   ok "kernel → ${kernel_dir}/vmlinux"
@@ -388,13 +388,16 @@ install_macos() {
     local lima_config
     lima_config=$(mktemp)
     cat > "$lima_config" <<'LIMAEOF'
-# LOKA Lima VM — Linux with KVM for Firecracker microVMs
+# LOKA Lima VM — Linux with KVM via nested virtualization
+
+vmType: vz
+nestedVirtualization: true
 
 images:
-  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
-    arch: "x86_64"
   - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
     arch: "aarch64"
+  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+    arch: "x86_64"
 
 cpus: 4
 memory: "8GiB"
@@ -416,9 +419,11 @@ provision:
       #!/bin/bash
       set -eux
 
-      # Enable KVM.
+      # Install dependencies.
       apt-get update -q
-      apt-get install -y -q qemu-kvm curl
+      apt-get install -y -q qemu-kvm curl iptables iproute2 e2fsprogs
+
+      # Enable KVM.
       [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
 
       # Install Docker.
@@ -430,7 +435,24 @@ provision:
       # Install LOKA inside the VM.
       curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 
-      echo "LOKA is ready inside the Lima VM."
+      # Create a default rootfs from Alpine for quick start.
+      if command -v docker &>/dev/null && [ ! -f /tmp/loka-data/artifacts/rootfs/rootfs.ext4 ]; then
+        echo "Creating default rootfs..."
+        mkdir -p /tmp/loka-data/artifacts/rootfs
+        docker pull alpine:latest >/dev/null 2>&1
+        CID=$(docker create alpine:latest)
+        docker export $CID > /tmp/rootfs.tar
+        docker rm $CID >/dev/null
+        dd if=/dev/zero of=/tmp/loka-data/artifacts/rootfs/rootfs.ext4 bs=1M count=512 2>/dev/null
+        mkfs.ext4 -F /tmp/loka-data/artifacts/rootfs/rootfs.ext4 >/dev/null 2>&1
+        mkdir -p /mnt/rootfs
+        mount /tmp/loka-data/artifacts/rootfs/rootfs.ext4 /mnt/rootfs
+        tar xf /tmp/rootfs.tar -C /mnt/rootfs 2>/dev/null
+        umount /mnt/rootfs
+        rm /tmp/rootfs.tar
+      fi
+
+      echo "LOKA ready with KVM + Firecracker."
 LIMAEOF
 
     limactl create --name="$LIMA_INSTANCE" "$lima_config"
