@@ -1,0 +1,148 @@
+syntax = "proto3";
+
+package loka.supervisor.v1;
+
+option go_package = "github.com/lokahq/loka/api/proto/gen/supervisorv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// SupervisorService runs inside the guest VM, listening on vsock.
+// The worker agent (host side) communicates with it to execute commands.
+service SupervisorService {
+
+  // Execute runs a single command and returns the result.
+  rpc Execute(SupervisorExecRequest) returns (SupervisorExecResponse);
+
+  // ExecuteParallel runs multiple commands concurrently and returns all results.
+  rpc ExecuteParallel(SupervisorParallelExecRequest) returns (SupervisorParallelExecResponse);
+
+  // StreamOutput streams stdout/stderr for a running command.
+  rpc StreamOutput(StreamOutputRequest) returns (stream SupervisorOutputChunk);
+
+  // Cancel cancels a running command or batch.
+  rpc Cancel(SupervisorCancelRequest) returns (SupervisorCancelResponse);
+
+  // ListProcesses returns all currently running processes.
+  rpc ListProcesses(google.protobuf.Empty) returns (ProcessList);
+
+  // SetMode changes the execution mode enforcement inside the VM.
+  rpc SetMode(SupervisorSetModeRequest) returns (SupervisorSetModeResponse);
+
+  // File operations
+  rpc ReadFile(ReadFileRequest) returns (ReadFileResponse);
+  rpc WriteFile(WriteFileRequest) returns (google.protobuf.Empty);
+  rpc ListDir(ListDirRequest) returns (ListDirResponse);
+}
+
+// ─── Execution ─────────────────────────────────────────────
+
+message SupervisorExecRequest {
+  string id                       = 1;
+  string command                  = 2;
+  repeated string args            = 3;
+  string workdir                  = 4;
+  map<string, string> env         = 5;
+  SupervisorResourceLimits limits = 6;
+}
+
+message SupervisorResourceLimits {
+  int32 cpu_millicores = 1;
+  int64 memory_bytes   = 2;
+}
+
+message SupervisorExecResponse {
+  string id                            = 1;
+  int32 exit_code                     = 2;
+  string stdout                       = 3;
+  string stderr                       = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp ended_at   = 6;
+}
+
+message SupervisorParallelExecRequest {
+  repeated SupervisorExecRequest commands = 1;
+}
+
+message SupervisorParallelExecResponse {
+  repeated SupervisorExecResponse results = 1;
+}
+
+// ─── Streaming ─────────────────────────────────────────────
+
+message StreamOutputRequest {
+  string exec_id    = 1;
+  string command_id = 2; // Optional: specific command in parallel batch.
+}
+
+message SupervisorOutputChunk {
+  string command_id = 1;
+  bool is_stderr    = 2;
+  bytes data        = 3;
+}
+
+// ─── Cancel ────────────────────────────────────────────────
+
+message SupervisorCancelRequest {
+  string exec_id    = 1; // Cancel entire execution.
+  string command_id = 2; // Optional: cancel specific command.
+}
+
+message SupervisorCancelResponse {
+  bool success       = 1;
+  string message     = 2;
+}
+
+// ─── Process List ──────────────────────────────────────────
+
+message ProcessInfo {
+  string command_id = 1;
+  string command    = 2;
+  int32 pid         = 3;
+  string status     = 4; // "running", "stopped"
+  google.protobuf.Timestamp started_at = 5;
+}
+
+message ProcessList {
+  repeated ProcessInfo processes = 1;
+}
+
+// ─── Mode ──────────────────────────────────────────────────
+
+message SupervisorSetModeRequest {
+  string mode = 1; // "inspect", "plan", "execute", "commit"
+}
+
+message SupervisorSetModeResponse {
+  string mode     = 1;
+  string message  = 2;
+}
+
+// ─── File Operations ───────────────────────────────────────
+
+message ReadFileRequest {
+  string path = 1;
+}
+
+message ReadFileResponse {
+  bytes content = 1;
+}
+
+message WriteFileRequest {
+  string path    = 1;
+  bytes content  = 2;
+}
+
+message ListDirRequest {
+  string path = 1;
+}
+
+message DirEntry {
+  string name    = 1;
+  bool is_dir    = 2;
+  int64 size     = 3;
+}
+
+message ListDirResponse {
+  repeated DirEntry entries = 1;
+}

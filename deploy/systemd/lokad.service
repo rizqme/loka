@@ -1,0 +1,26 @@
+[Unit]
+Description=LOKA Control Plane
+Documentation=https://github.com/lokahq/loka
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=loka
+Group=loka
+ExecStart=/usr/local/bin/lokad
+Environment=LOKA_CONFIG=/etc/loka/controlplane.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/loka /tmp/loka-data
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

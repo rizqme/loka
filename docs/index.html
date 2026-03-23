@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LOKA Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple-dark.css">
+  <style>
+    :root {
+      --base-font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      --base-font-size: 15px;
+      --base-line-height: 1.75;
+      --theme-color: #e8a838;
+      --mono-font-family: 'SF Mono', 'Fira Code', 'JetBrains Mono', Menlo, monospace;
+      --sidebar-width: 260px;
+      --sidebar-nav-link-color--active: #e8a838;
+      --sidebar-nav-link-border-color--active: #e8a838;
+      --sidebar-background: #111114;
+      --code-font-size: 0.85em;
+      --blockquote-border-color: #e8a838;
+      --link-color: #e8a838;
+    }
+    .app-name-link { color: #e8a838 !important; font-family: var(--mono-font-family); letter-spacing: 0.12em; font-size: 1.1em; }
+
+    /* ── Sidebar ───────────────────── */
+    .sidebar-nav > ul > li > a { font-weight: 600; font-size: 0.72em; letter-spacing: 0.06em; text-transform: uppercase; color: #555 !important; margin-top: 0.8em; }
+    .sidebar-nav > ul > li > ul > li > a { font-size: 0.88em; }
+    .sidebar-nav li > a::before { display: none !important; }
+    .sidebar-nav ul li a { padding-left: 0; }
+
+    /* ── Cards ──────────────────────── */
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 1.5em 0; }
+    .card { background: #18181c; border: 1px solid #2a2a30; border-radius: 8px; padding: 1.1em 1.2em; transition: border-color 0.15s, transform 0.15s; text-decoration: none !important; display: block; }
+    .card:hover { border-color: #e8a838; transform: translateY(-2px); }
+    .card-icon { font-size: 1.4em; margin-bottom: 0.3em; }
+    .card-title { font-weight: 600; color: #e0e0e0; font-size: 0.92em; margin-bottom: 0.2em; }
+    .card-desc { color: #888; font-size: 0.8em; line-height: 1.5; }
+
+    /* ── Steps ──────────────────────── */
+    .steps { counter-reset: step; margin: 1.5em 0; }
+    .step { position: relative; padding-left: 3em; margin-bottom: 2em; }
+    .step::before { counter-increment: step; content: counter(step); position: absolute; left: 0; top: 0; width: 2em; height: 2em; background: #e8a83818; color: #e8a838; border: 1px solid #e8a83844; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 0.85em; font-family: var(--mono-font-family); }
+    .step h3 { margin-top: 0 !important; padding-top: 0.15em; }
+
+    /* ── Callouts ───────────────────── */
+    .tip, .warning, .info { padding: 0.75em 1em; border-radius: 6px; margin: 1em 0; font-size: 0.9em; border-left: 3px solid; }
+    .tip { background: #e8a83810; border-color: #e8a838; }
+    .warning { background: #e0585810; border-color: #e05858; }
+    .info { background: #5898e010; border-color: #5898e0; }
+
+    /* ── Hero ───────────────────────── */
+    .hero { text-align: center; padding: 2em 0 1em; }
+    .hero h1 { font-size: 2.5em !important; border: none !important; }
+    .hero p { color: #888; font-size: 1.05em; max-width: 520px; margin: 0.3em auto 1.5em; }
+    .hero-badges { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; margin-bottom: 1.5em; }
+    .badge { padding: 0.2em 0.65em; background: #1c1c22; border: 1px solid #2a2a30; border-radius: 999px; font-family: var(--mono-font-family); font-size: 0.72em; color: #888; }
+
+    /* ── Polish ─────────────────────── */
+    .markdown-section h1 { font-size: 1.8em; border-bottom: none; }
+    .markdown-section h2 { margin-top: 2em; padding-bottom: 0.3em; border-bottom: 1px solid #1e1e24; }
+    .markdown-section table { font-size: 0.88em; }
+    .markdown-section th { font-family: var(--mono-font-family); font-size: 0.75em; letter-spacing: 0.04em; text-transform: uppercase; color: #666; }
+    .markdown-section pre { border: 1px solid #1e1e24; border-radius: 6px; }
+    .markdown-section a { border-bottom: 1px solid #e8a83844; text-decoration: none; }
+    .markdown-section a:hover { border-bottom-color: #e8a838; }
+    .markdown-section blockquote { border-left: 3px solid #e8a838; background: #e8a83808; padding: 0.8em 1em; border-radius: 0 6px 6px 0; }
+    /* ── Right-side page TOC ────────── */
+    .page-toc {
+      position: fixed;
+      top: 0;
+      right: 0;
+      width: 200px;
+      height: 100vh;
+      overflow-y: auto;
+      padding: 2em 1em 2em 0.5em;
+      z-index: 10;
+    }
+    .page-toc .toc-title {
+      font-family: var(--mono-font-family);
+      font-size: 0.68em;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: #555;
+      margin-bottom: 0.8em;
+      padding-left: 0.75em;
+    }
+    .page-toc ul { list-style: none; padding: 0; margin: 0; }
+    .page-toc li { margin: 0; }
+    .page-toc a {
+      display: block;
+      padding: 0.2em 0.75em;
+      font-size: 0.78em;
+      color: #666;
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: all 0.12s;
+      line-height: 1.5;
+    }
+    .page-toc a:hover { color: #ccc; border-left-color: #333; }
+    .page-toc a.active { color: #e8a838; border-left-color: #e8a838; }
+    .page-toc li[data-level="3"] a { padding-left: 1.5em; font-size: 0.74em; }
+
+    /* Shrink main content to make room for TOC */
+    .content { margin-right: 200px; }
+    section.content { padding-right: 1em; }
+
+    @media (max-width: 1100px) {
+      .page-toc { display: none; }
+      .content { margin-right: 0; }
+      section.content { padding-right: 0; }
+    }
+    @media (max-width: 600px) { .card-grid { grid-template-columns: 1fr; } .hero h1 { font-size: 1.8em !important; } }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <script>
+    window.$docsify = {
+      name: 'LOKA',
+      nameLink: '/',
+      repo: 'https://github.com/rizqme/loka',
+      loadSidebar: true,
+      subMaxLevel: 0,
+      toc: { tocMaxLevel: 3, target: 'h2, h3' },
+      search: { placeholder: 'Search docs...', noData: 'No results', depth: 3 },
+      auto2top: true,
+      executeScript: true,
+      tabs: { persist: true, sync: true, theme: 'classic' },
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/docsify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify@4/lib/plugins/search.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-tabs@1/dist/docsify-tabs.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-go.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-python.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-typescript.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-protobuf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/docsify-copy-code@2/dist/docsify-copy-code.min.js"></script>
+  <script>
+    // Right-side "On this page" TOC plugin
+    function pageTocPlugin(hook) {
+      var tocEl;
+      hook.doneEach(function() {
+        if (tocEl) tocEl.remove();
+        var content = document.querySelector('.markdown-section');
+        if (!content) return;
+        var headings = content.querySelectorAll('h2, h3');
+        if (headings.length < 2) return;
+
+        tocEl = document.createElement('div');
+        tocEl.className = 'page-toc';
+
+        var title = document.createElement('div');
+        title.className = 'toc-title';
+        title.textContent = 'On this page';
+        tocEl.appendChild(title);
+
+        var ul = document.createElement('ul');
+        headings.forEach(function(h) {
+          var li = document.createElement('li');
+          var level = h.tagName.toLowerCase() === 'h3' ? '3' : '2';
+          li.setAttribute('data-level', level);
+
+          var a = document.createElement('a');
+          var anchor = h.querySelector('a');
+          if (anchor) a.href = anchor.getAttribute('href');
+          a.textContent = h.textContent.replace(/^#/, '').trim();
+          a.addEventListener('click', function(e) {
+            e.preventDefault();
+            h.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          });
+
+          li.appendChild(a);
+          ul.appendChild(li);
+        });
+        tocEl.appendChild(ul);
+        document.body.appendChild(tocEl);
+
+        // Scroll spy
+        var links = tocEl.querySelectorAll('a');
+        function updateActive() {
+          var current = null;
+          headings.forEach(function(h, i) {
+            if (h.getBoundingClientRect().top <= 80) current = i;
+          });
+          links.forEach(function(a, i) {
+            a.classList.toggle('active', i === current);
+          });
+        }
+        window.addEventListener('scroll', updateActive, { passive: true });
+        updateActive();
+      });
+    }
+    window.$docsify.plugins = (window.$docsify.plugins || []).concat(pageTocPlugin);
+  </script>
+</body>
+</html>

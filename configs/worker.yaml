@@ -1,0 +1,13 @@
+# LOKA Worker Agent Configuration
+control_plane:
+  address: "localhost:9090"
+
+data_dir: "/var/loka/worker"
+provider: local
+token: ""
+
+labels:
+  region: local
+
+tls:
+  enabled: false

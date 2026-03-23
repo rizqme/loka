@@ -1,0 +1,424 @@
+package vm
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log/slog"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"time"
+)
+
+// FirecrackerConfig holds paths to Firecracker components.
+type FirecrackerConfig struct {
+	BinaryPath string // Path to firecracker binary.
+	KernelPath string // Path to vmlinux kernel image.
+	RootfsPath string // Path to base rootfs ext4 image.
+	DataDir    string // Working directory for VM sockets and state.
+}
+
+// MicroVM represents a running Firecracker microVM instance.
+type MicroVM struct {
+	ID         string
+	SocketPath string // API socket path.
+	VsockPath  string // Vsock UDS path for host-guest communication.
+	PID        int    // Firecracker process PID.
+	Config     VMConfig
+	State      VMState
+
+	cmd    *exec.Cmd
+	cancel context.CancelFunc
+	mu     sync.Mutex
+	logger *slog.Logger
+}
+
+// VMConfig is the configuration for a single microVM.
+type VMConfig struct {
+	VCPU       int
+	MemoryMB   int
+	KernelPath string
+	RootfsPath string
+	OverlayDir string // Session overlay directory.
+	VsockCID   uint32 // Vsock guest CID (unique per VM).
+
+	// Warm snapshot restore (set both for ~28ms startup instead of cold boot).
+	SnapshotMemPath     string // Path to memory snapshot file.
+	SnapshotVMStatePath string // Path to VM state snapshot file.
+}
+
+// VMState tracks the lifecycle state of a VM.
+type VMState string
+
+const (
+	VMStateCreating VMState = "creating"
+	VMStateRunning  VMState = "running"
+	VMStatePaused   VMState = "paused"
+	VMStateStopped  VMState = "stopped"
+)
+
+// Manager manages Firecracker microVM instances on this worker.
+type Manager struct {
+	cfg    FirecrackerConfig
+	mu     sync.Mutex
+	vms    map[string]*MicroVM
+	nextCID uint32 // Next vsock CID to assign.
+	logger *slog.Logger
+}
+
+// NewManager creates a new Firecracker VM manager.
+func NewManager(cfg FirecrackerConfig, logger *slog.Logger) (*Manager, error) {
+	// Validate Firecracker binary exists.
+	if _, err := os.Stat(cfg.BinaryPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("firecracker binary not found at %s — run 'make fetch-firecracker'", cfg.BinaryPath)
+	}
+	if _, err := os.Stat(cfg.KernelPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("kernel image not found at %s — run 'make fetch-kernel'", cfg.KernelPath)
+	}
+	if _, err := os.Stat(cfg.RootfsPath); os.IsNotExist(err) {
+		return nil, fmt.Errorf("rootfs image not found at %s — run 'make build-rootfs'", cfg.RootfsPath)
+	}
+
+	os.MkdirAll(cfg.DataDir, 0o755)
+
+	return &Manager{
+		cfg:     cfg,
+		vms:     make(map[string]*MicroVM),
+		nextCID: 3, // CID 0=hypervisor, 1=loopback, 2=host, 3+=guests.
+		logger:  logger,
+	}, nil
+}
+
+// Launch starts a new Firecracker microVM.
+// If cfg.SnapshotMemPath and cfg.SnapshotVMStatePath are set, restores from
+// a warm snapshot (~28ms) instead of cold-booting (~1-2s).
+func (m *Manager) Launch(ctx context.Context, id string, cfg VMConfig) (*MicroVM, error) {
+	m.mu.Lock()
+	if _, exists := m.vms[id]; exists {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("VM %s already exists", id)
+	}
+	cid := m.nextCID
+	m.nextCID++
+	m.mu.Unlock()
+
+	cfg.VsockCID = cid
+	if cfg.KernelPath == "" {
+		cfg.KernelPath = m.cfg.KernelPath
+	}
+	if cfg.RootfsPath == "" {
+		cfg.RootfsPath = m.cfg.RootfsPath
+	}
+
+	vmDir := filepath.Join(m.cfg.DataDir, "vms", id)
+	os.MkdirAll(vmDir, 0o755)
+
+	socketPath := filepath.Join(vmDir, "firecracker.sock")
+	vsockPath := filepath.Join(vmDir, "vsock.sock")
+
+	// Remove stale sockets.
+	os.Remove(socketPath)
+	os.Remove(vsockPath)
+
+	// Determine startup mode: snapshot restore (~28ms) vs cold boot (~1-2s).
+	useSnapshot := cfg.SnapshotMemPath != "" && cfg.SnapshotVMStatePath != ""
+
+	var cmd *exec.Cmd
+	vmCtx, cancel := context.WithCancel(ctx)
+
+	if useSnapshot {
+		// Snapshot restore: start Firecracker with --no-api, then load snapshot via API.
+		cmd = exec.CommandContext(vmCtx, m.cfg.BinaryPath,
+			"--api-sock", socketPath,
+		)
+	} else {
+		// Cold boot: start with full config.
+		fcConfig := buildFirecrackerConfig(cfg, socketPath, vsockPath)
+		configPath := filepath.Join(vmDir, "config.json")
+		configBytes, _ := json.MarshalIndent(fcConfig, "", "  ")
+		if err := os.WriteFile(configPath, configBytes, 0o644); err != nil {
+			cancel()
+			return nil, fmt.Errorf("write config: %w", err)
+		}
+		cmd = exec.CommandContext(vmCtx, m.cfg.BinaryPath,
+			"--api-sock", socketPath,
+			"--config-file", configPath,
+		)
+	}
+	cmd.Dir = vmDir
+	cmd.Stdout = os.Stdout // TODO: route to structured logging.
+	cmd.Stderr = os.Stderr
+
+	microVM := &MicroVM{
+		ID:         id,
+		SocketPath: socketPath,
+		VsockPath:  vsockPath,
+		Config:     cfg,
+		State:      VMStateCreating,
+		cmd:        cmd,
+		cancel:     cancel,
+		logger:     m.logger,
+	}
+
+	if err := cmd.Start(); err != nil {
+		cancel()
+		return nil, fmt.Errorf("start firecracker: %w", err)
+	}
+	microVM.PID = cmd.Process.Pid
+	microVM.State = VMStateRunning
+
+	m.mu.Lock()
+	m.vms[id] = microVM
+	m.mu.Unlock()
+
+	// Wait for the VM process in the background.
+	go func() {
+		cmd.Wait()
+		m.mu.Lock()
+		microVM.State = VMStateStopped
+		m.mu.Unlock()
+		m.logger.Info("VM process exited", "id", id, "pid", microVM.PID)
+	}()
+
+	m.logger.Info("VM launched",
+		"id", id,
+		"pid", microVM.PID,
+		"vcpu", cfg.VCPU,
+		"memory_mb", cfg.MemoryMB,
+		"cid", cid,
+		"socket", socketPath,
+	)
+
+	// If using snapshot restore, load the snapshot via Firecracker API.
+	if useSnapshot {
+		if err := waitForSocket(socketPath, 5*time.Second); err != nil {
+			m.logger.Warn("firecracker API socket not ready", "id", id)
+		}
+		// Load snapshot via PUT /snapshot/load.
+		body := fmt.Sprintf(`{"snapshot_path":"%s","mem_backend":{"backend_path":"%s","backend_type":"File"},"enable_diff_snapshots":false,"resume_vm":true}`,
+			cfg.SnapshotVMStatePath, cfg.SnapshotMemPath)
+		if err := firecrackerAPIPut(socketPath, "/snapshot/load", body); err != nil {
+			cancel()
+			return nil, fmt.Errorf("load snapshot: %w", err)
+		}
+		m.logger.Info("VM restored from warm snapshot", "id", id, "pid", microVM.PID)
+	}
+
+	// Wait for the vsock to be ready.
+	if err := waitForSocket(vsockPath, 10*time.Second); err != nil {
+		m.logger.Warn("vsock not ready within timeout — supervisor may not have started", "id", id)
+	}
+
+	return microVM, nil
+}
+
+// Stop stops a running VM.
+func (m *Manager) Stop(id string) error {
+	m.mu.Lock()
+	vm, ok := m.vms[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("VM %s not found", id)
+	}
+	m.mu.Unlock()
+
+	vm.mu.Lock()
+	defer vm.mu.Unlock()
+
+	if vm.State == VMStateStopped {
+		return nil
+	}
+
+	vm.cancel()
+	vm.State = VMStateStopped
+
+	// Clean up socket files.
+	os.Remove(vm.SocketPath)
+	os.Remove(vm.VsockPath)
+
+	m.mu.Lock()
+	delete(m.vms, id)
+	m.mu.Unlock()
+
+	m.logger.Info("VM stopped", "id", id)
+	return nil
+}
+
+// Get returns a VM by ID.
+func (m *Manager) Get(id string) (*MicroVM, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	vm, ok := m.vms[id]
+	return vm, ok
+}
+
+// List returns all VMs.
+func (m *Manager) List() []*MicroVM {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	vms := make([]*MicroVM, 0, len(m.vms))
+	for _, vm := range m.vms {
+		vms = append(vms, vm)
+	}
+	return vms
+}
+
+// Pause pauses a VM (for snapshotting).
+func (m *Manager) Pause(id string) error {
+	vm, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("VM %s not found", id)
+	}
+	// Send PATCH to Firecracker API to pause.
+	return firecrackerAPIPatch(vm.SocketPath, "/vm", `{"state":"Paused"}`)
+}
+
+// Resume resumes a paused VM.
+func (m *Manager) Resume(id string) error {
+	vm, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("VM %s not found", id)
+	}
+	return firecrackerAPIPatch(vm.SocketPath, "/vm", `{"state":"Resumed"}`)
+}
+
+// CreateSnapshot creates a full VM snapshot (memory + disk state).
+func (m *Manager) CreateSnapshot(id, memPath, snapPath string) error {
+	vm, ok := m.Get(id)
+	if !ok {
+		return fmt.Errorf("VM %s not found", id)
+	}
+
+	// Pause first.
+	if err := m.Pause(id); err != nil {
+		return fmt.Errorf("pause for snapshot: %w", err)
+	}
+
+	body := fmt.Sprintf(`{"snapshot_type":"Full","snapshot_path":"%s","mem_file_path":"%s"}`, snapPath, memPath)
+	if err := firecrackerAPIPut(vm.SocketPath, "/snapshot/create", body); err != nil {
+		m.Resume(id)
+		return fmt.Errorf("create snapshot: %w", err)
+	}
+
+	// Resume after snapshot.
+	return m.Resume(id)
+}
+
+// ── Firecracker Config Builder ──────────────────────────
+
+type fcConfig struct {
+	BootSource    fcBootSource    `json:"boot-source"`
+	Drives        []fcDrive       `json:"drives"`
+	MachineConfig fcMachineConfig `json:"machine-config"`
+	Vsock         *fcVsock        `json:"vsock,omitempty"`
+}
+
+type fcBootSource struct {
+	KernelImagePath string `json:"kernel_image_path"`
+	BootArgs        string `json:"boot_args"`
+}
+
+type fcDrive struct {
+	DriveID      string `json:"drive_id"`
+	PathOnHost   string `json:"path_on_host"`
+	IsRootDevice bool   `json:"is_root_device"`
+	IsReadOnly   bool   `json:"is_read_only"`
+}
+
+type fcMachineConfig struct {
+	VcpuCount  int `json:"vcpu_count"`
+	MemSizeMib int `json:"mem_size_mib"`
+}
+
+type fcVsock struct {
+	GuestCID int    `json:"guest_cid"`
+	UdsPath  string `json:"uds_path"`
+}
+
+func buildFirecrackerConfig(cfg VMConfig, socketPath, vsockPath string) fcConfig {
+	vcpu := cfg.VCPU
+	if vcpu == 0 {
+		vcpu = 1
+	}
+	mem := cfg.MemoryMB
+	if mem == 0 {
+		mem = 512
+	}
+
+	bootArgs := "console=ttyS0 reboot=k panic=1 pci=off init=/usr/local/bin/loka-supervisor"
+
+	drives := []fcDrive{
+		{
+			DriveID:      "rootfs",
+			PathOnHost:   cfg.RootfsPath,
+			IsRootDevice: true,
+			IsReadOnly:   true, // Base rootfs is always read-only.
+		},
+	}
+
+	// Add overlay drive if available.
+	if cfg.OverlayDir != "" {
+		drives = append(drives, fcDrive{
+			DriveID:      "overlay",
+			PathOnHost:   cfg.OverlayDir,
+			IsRootDevice: false,
+			IsReadOnly:   false,
+		})
+	}
+
+	return fcConfig{
+		BootSource: fcBootSource{
+			KernelImagePath: cfg.KernelPath,
+			BootArgs:        bootArgs,
+		},
+		Drives: drives,
+		MachineConfig: fcMachineConfig{
+			VcpuCount:  vcpu,
+			MemSizeMib: mem,
+		},
+		Vsock: &fcVsock{
+			GuestCID: int(cfg.VsockCID),
+			UdsPath:  vsockPath,
+		},
+	}
+}
+
+// ── Firecracker API Helpers ─────────────────────────────
+
+func firecrackerAPIPatch(socketPath, path, body string) error {
+	return firecrackerAPICall(socketPath, "PATCH", path, body)
+}
+
+func firecrackerAPIPut(socketPath, path, body string) error {
+	return firecrackerAPICall(socketPath, "PUT", path, body)
+}
+
+func firecrackerAPICall(socketPath, method, path, body string) error {
+	// Use curl with unix socket to talk to Firecracker API.
+	args := []string{
+		"--unix-socket", socketPath,
+		"-X", method,
+		"-H", "Content-Type: application/json",
+		"-d", body,
+		"http://localhost" + path,
+	}
+	cmd := exec.Command("curl", args...)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w (output: %s)", method, path, err, string(out))
+	}
+	return nil
+}
+
+func waitForSocket(path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("socket %s not ready after %s", path, timeout)
+}

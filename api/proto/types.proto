@@ -1,0 +1,176 @@
+syntax = "proto3";
+
+package loka.api.v1;
+
+option go_package = "github.com/lokahq/loka/api/proto/gen/lokav1";
+
+import "google/protobuf/timestamp.proto";
+
+// ─── Session ───────────────────────────────────────────────
+
+enum SessionStatus {
+  SESSION_STATUS_UNSPECIFIED = 0;
+  SESSION_STATUS_CREATING    = 1;
+  SESSION_STATUS_RUNNING     = 2;
+  SESSION_STATUS_PAUSED      = 3;
+  SESSION_STATUS_TERMINATING = 4;
+  SESSION_STATUS_TERMINATED  = 5;
+  SESSION_STATUS_ERROR       = 6;
+}
+
+enum ExecMode {
+  EXEC_MODE_UNSPECIFIED = 0;
+  EXEC_MODE_INSPECT     = 1;
+  EXEC_MODE_PLAN        = 2;
+  EXEC_MODE_EXECUTE     = 3;
+  EXEC_MODE_COMMIT      = 4;
+}
+
+message Session {
+  string id                          = 1;
+  string name                        = 2;
+  SessionStatus status               = 3;
+  ExecMode mode                      = 4;
+  string worker_id                   = 5;
+  string snapshot                    = 6;
+  repeated string packages           = 7;
+  string profile                     = 8;
+  int32 vcpus                        = 9;
+  int32 memory_mb                    = 10;
+  map<string, string> labels         = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp updated_at = 13;
+}
+
+// ─── Execution ─────────────────────────────────────────────
+
+enum ExecStatus {
+  EXEC_STATUS_UNSPECIFIED = 0;
+  EXEC_STATUS_PENDING     = 1;
+  EXEC_STATUS_RUNNING     = 2;
+  EXEC_STATUS_SUCCESS     = 3;
+  EXEC_STATUS_FAILED      = 4;
+  EXEC_STATUS_CANCELED    = 5;
+}
+
+message Command {
+  string id                       = 1;
+  string command                  = 2;
+  repeated string args            = 3;
+  string workdir                  = 4;
+  map<string, string> env         = 5;
+  ResourceLimits limits           = 6;
+}
+
+message ResourceLimits {
+  int32 cpu_millicores = 1; // 0 = unlimited
+  int64 memory_bytes   = 2; // 0 = unlimited
+}
+
+message CommandResult {
+  string command_id                    = 1;
+  int32 exit_code                     = 2;
+  string stdout                       = 3;
+  string stderr                       = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp ended_at   = 6;
+}
+
+message Execution {
+  string id                          = 1;
+  string session_id                  = 2;
+  ExecStatus status                  = 3;
+  bool parallel                      = 4;
+  repeated Command commands          = 5;
+  repeated CommandResult results     = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// ─── Checkpoint ────────────────────────────────────────────
+
+enum CheckpointType {
+  CHECKPOINT_TYPE_UNSPECIFIED = 0;
+  CHECKPOINT_TYPE_LIGHT       = 1;
+  CHECKPOINT_TYPE_FULL        = 2;
+}
+
+enum CheckpointStatus {
+  CHECKPOINT_STATUS_UNSPECIFIED = 0;
+  CHECKPOINT_STATUS_CREATING    = 1;
+  CHECKPOINT_STATUS_READY       = 2;
+  CHECKPOINT_STATUS_FAILED      = 3;
+}
+
+message Checkpoint {
+  string id                          = 1;
+  string session_id                  = 2;
+  string parent_id                   = 3;
+  CheckpointType type                = 4;
+  CheckpointStatus status            = 5;
+  string label                       = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CheckpointDAG {
+  string session_id                  = 1;
+  string root_id                     = 2;
+  string current_id                  = 3;
+  repeated Checkpoint checkpoints    = 4;
+}
+
+// ─── Worker ────────────────────────────────────────────────
+
+enum WorkerStatus {
+  WORKER_STATUS_UNSPECIFIED  = 0;
+  WORKER_STATUS_REGISTERING  = 1;
+  WORKER_STATUS_READY        = 2;
+  WORKER_STATUS_BUSY         = 3;
+  WORKER_STATUS_DRAINING     = 4;
+  WORKER_STATUS_SUSPECT      = 5;
+  WORKER_STATUS_DEAD         = 6;
+}
+
+message Worker {
+  string id                          = 1;
+  string hostname                    = 2;
+  string ip_address                  = 3;
+  string provider                    = 4;
+  string region                      = 5;
+  string zone                        = 6;
+  WorkerStatus status                = 7;
+  map<string, string> labels         = 8;
+  ResourceCapacity capacity          = 9;
+  string agent_version               = 10;
+  bool kvm_available                 = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp last_seen  = 13;
+}
+
+message ResourceCapacity {
+  int32 cpu_cores  = 1;
+  int64 memory_mb  = 2;
+  int64 disk_mb    = 3;
+}
+
+message ResourceUsage {
+  double cpu_percent    = 1;
+  int64 memory_used_mb  = 2;
+  int64 disk_used_mb    = 3;
+}
+
+// ─── Packages ──────────────────────────────────────────────
+
+message Package {
+  string name                        = 1;
+  string version                     = 2;
+  repeated string dependencies       = 3;
+  int64 size_mb                      = 4;
+}
+
+message PackageProfile {
+  string name                        = 1;
+  repeated string packages           = 2;
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp updated_at = 4;
+}

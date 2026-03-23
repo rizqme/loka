@@ -1,0 +1,164 @@
+syntax = "proto3";
+
+package loka.api.v1;
+
+option go_package = "github.com/lokahq/loka/api/proto/gen/lokav1";
+
+import "types.proto";
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// WorkerService is the internal gRPC service that workers connect to on the control plane.
+service WorkerService {
+
+  // Register is called once when the worker starts.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // Heartbeat is a bidirectional stream.
+  // Worker → CP: periodic heartbeats with resource metrics.
+  // CP → Worker: commands (launch, stop, checkpoint, drain, etc.).
+  rpc Heartbeat(stream HeartbeatMessage) returns (stream WorkerCommand);
+
+  // ReportSessionStatus is called by workers to report session state changes.
+  rpc ReportSessionStatus(SessionStatusReport) returns (google.protobuf.Empty);
+
+  // ReportCheckpointComplete is called when a checkpoint operation finishes.
+  rpc ReportCheckpointComplete(CheckpointReport) returns (google.protobuf.Empty);
+
+  // ReportExecComplete is called when a command execution finishes.
+  rpc ReportExecComplete(ExecReport) returns (google.protobuf.Empty);
+}
+
+// ─── Registration ──────────────────────────────────────────
+
+message RegisterRequest {
+  string provider                    = 1;
+  string token                       = 2;
+  string hostname                    = 3;
+  string ip_address                  = 4;
+  ResourceCapacity capacity          = 5;
+  map<string, string> labels         = 6;
+  string region                      = 7;
+  string zone                        = 8;
+  bool kvm_available                 = 9;
+  string agent_version               = 10;
+}
+
+message RegisterResponse {
+  string worker_id                   = 1;
+  WorkerRuntimeConfig config         = 2;
+}
+
+message WorkerRuntimeConfig {
+  int32 heartbeat_interval_seconds   = 1;
+  ObjectStoreConfig object_store     = 2;
+}
+
+message ObjectStoreConfig {
+  string type   = 1; // "s3", "gcs", "local"
+  string bucket = 2;
+  string region = 3;
+  // Credentials are rotated via the heartbeat stream.
+}
+
+// ─── Heartbeat ─────────────────────────────────────────────
+
+message HeartbeatMessage {
+  string worker_id                       = 1;
+  google.protobuf.Timestamp timestamp    = 2;
+  ResourceUsage current_usage            = 3;
+  repeated RunningSession sessions       = 4;
+  WorkerStatus status                    = 5;
+}
+
+message RunningSession {
+  string session_id    = 1;
+  SessionStatus status = 2;
+}
+
+// ─── Worker Commands (CP → Worker) ─────────────────────────
+
+message WorkerCommand {
+  string command_id = 1; // Unique ID for tracking.
+  oneof command {
+    LaunchSessionCmd launch_session         = 2;
+    StopSessionCmd stop_session             = 3;
+    ExecCommandCmd exec_command             = 4;
+    CreateCheckpointCmd create_checkpoint   = 5;
+    RestoreCheckpointCmd restore_checkpoint = 6;
+    SetModeCmd set_mode                     = 7;
+    DrainCmd drain                          = 8;
+  }
+}
+
+message LaunchSessionCmd {
+  string session_id              = 1;
+  string snapshot                = 2; // Object store key for base snapshot.
+  repeated string packages       = 3;
+  ExecMode initial_mode          = 4;
+  int32 vcpus                    = 5;
+  int32 memory_mb                = 6;
+}
+
+message StopSessionCmd {
+  string session_id = 1;
+  bool force        = 2;
+}
+
+message ExecCommandCmd {
+  string session_id          = 1;
+  string exec_id             = 2;
+  repeated Command commands  = 3;
+  bool parallel              = 4;
+}
+
+message CreateCheckpointCmd {
+  string session_id    = 1;
+  string checkpoint_id = 2;
+  CheckpointType type  = 3;
+}
+
+message RestoreCheckpointCmd {
+  string session_id    = 1;
+  string checkpoint_id = 2;
+  // Object store paths to pull.
+  string overlay_key   = 3;
+  string vmstate_key   = 4; // Empty for light checkpoints.
+}
+
+message SetModeCmd {
+  string session_id = 1;
+  ExecMode mode     = 2;
+}
+
+message DrainCmd {
+  int32 timeout_seconds = 1;
+}
+
+// ─── Reports (Worker → CP) ─────────────────────────────────
+
+message SessionStatusReport {
+  string worker_id     = 1;
+  string session_id    = 2;
+  SessionStatus status = 3;
+  string error_message = 4;
+}
+
+message CheckpointReport {
+  string worker_id       = 1;
+  string session_id      = 2;
+  string checkpoint_id   = 3;
+  bool success           = 4;
+  string error_message   = 5;
+  string overlay_key     = 6; // Object store key where overlay was uploaded.
+  string vmstate_key     = 7; // Object store key where VM state was uploaded.
+}
+
+message ExecReport {
+  string worker_id           = 1;
+  string session_id          = 2;
+  string exec_id             = 3;
+  ExecStatus status          = 4;
+  repeated CommandResult results = 5;
+  string error_message       = 6;
+}

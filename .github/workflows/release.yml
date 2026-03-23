@@ -1,0 +1,136 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+
+    runs-on: ${{ matrix.os }}
+    env:
+      GOOS: ${{ matrix.goos }}
+      GOARCH: ${{ matrix.goarch }}
+      # Tag name is safe — controlled by repo owners via git tag.
+      REF_NAME: ${{ github.ref_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+
+      - name: Build binaries
+        run: |
+          PLATFORM="${GOOS}-${GOARCH}"
+          LDFLAGS="-s -w -X github.com/rizqme/loka/pkg/version.Version=${REF_NAME}"
+
+          mkdir -p dist
+
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/lokad" ./cmd/lokad
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/loka-worker" ./cmd/loka-worker
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/loka-supervisor" ./cmd/loka-supervisor
+          go build -trimpath -ldflags "$LDFLAGS" -o "dist/lokactl" ./cmd/lokactl
+
+          tar -czf "dist/loka-${PLATFORM}.tar.gz" -C dist lokad loka-worker loka-supervisor lokactl
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: loka-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/loka-*.tar.gz
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/loka-*.tar.gz
+          generate_release_notes: true
+
+  publish-npm:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Set version from tag
+        working-directory: sdk/typescript
+        run: |
+          VERSION="${REF_NAME#v}"
+          npm version "$VERSION" --no-git-tag-version
+
+      - name: Build
+        working-directory: sdk/typescript
+        run: |
+          npm install
+          npm run build
+
+      - name: Publish
+        working-directory: sdk/typescript
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-pypi:
+    needs: release
+    runs-on: ubuntu-latest
+    env:
+      REF_NAME: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Set version from tag
+        working-directory: sdk/python
+        run: |
+          VERSION="${REF_NAME#v}"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" pyproject.toml
+
+      - name: Build
+        working-directory: sdk/python
+        run: |
+          pip install build
+          python -m build
+
+      - name: Publish
+        working-directory: sdk/python
+        run: |
+          pip install twine
+          twine upload dist/*
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}

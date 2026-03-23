@@ -1,0 +1,254 @@
+syntax = "proto3";
+
+package loka.api.v1;
+
+option go_package = "github.com/lokahq/loka/api/proto/gen/lokav1";
+
+import "types.proto";
+import "google/protobuf/empty.proto";
+
+// ControlService is the public API exposed by the LOKA control plane.
+// Used by external clients (agent systems, lokactl CLI).
+service ControlService {
+
+  // ─── Sessions ──────────────────────────────────────────
+
+  rpc CreateSession(CreateSessionRequest) returns (Session);
+  rpc GetSession(GetSessionRequest) returns (Session);
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+  rpc DestroySession(DestroySessionRequest) returns (google.protobuf.Empty);
+  rpc PauseSession(PauseSessionRequest) returns (Session);
+  rpc ResumeSession(ResumeSessionRequest) returns (Session);
+  rpc SetSessionMode(SetSessionModeRequest) returns (Session);
+
+  // ─── Command Execution ─────────────────────────────────
+
+  rpc Exec(ExecRequest) returns (Execution);
+  rpc GetExecution(GetExecutionRequest) returns (Execution);
+  rpc ListExecutions(ListExecutionsRequest) returns (ListExecutionsResponse);
+  rpc CancelExecution(CancelExecutionRequest) returns (Execution);
+  rpc StreamExecOutput(StreamExecOutputRequest) returns (stream OutputChunk);
+
+  // ─── Checkpoints ───────────────────────────────────────
+
+  rpc CreateCheckpoint(CreateCheckpointRequest) returns (Checkpoint);
+  rpc GetCheckpoint(GetCheckpointRequest) returns (Checkpoint);
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (CheckpointDAG);
+  rpc RestoreCheckpoint(RestoreCheckpointRequest) returns (Session);
+  rpc DeleteCheckpoint(DeleteCheckpointRequest) returns (google.protobuf.Empty);
+
+  // ─── Packages ──────────────────────────────────────────
+
+  rpc InstallPackage(InstallPackageRequest) returns (Package);
+  rpc ListPackages(ListPackagesRequest) returns (ListPackagesResponse);
+  rpc ValidatePackages(ValidatePackagesRequest) returns (ValidatePackagesResponse);
+
+  // ─── Package Profiles ──────────────────────────────────
+
+  rpc CreateProfile(CreateProfileRequest) returns (PackageProfile);
+  rpc GetProfile(GetProfileRequest) returns (PackageProfile);
+  rpc ListProfiles(ListProfilesRequest) returns (ListProfilesResponse);
+  rpc UpdateProfile(UpdateProfileRequest) returns (PackageProfile);
+  rpc DeleteProfile(DeleteProfileRequest) returns (google.protobuf.Empty);
+
+  // ─── Workers (admin) ───────────────────────────────────
+
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+  rpc GetWorker(GetWorkerRequest) returns (Worker);
+  rpc DrainWorker(DrainWorkerRequest) returns (Worker);
+  rpc RemoveWorker(RemoveWorkerRequest) returns (google.protobuf.Empty);
+}
+
+// ─── Session messages ──────────────────────────────────────
+
+message CreateSessionRequest {
+  string name                        = 1;
+  string snapshot                    = 2;
+  repeated string packages           = 3;
+  string profile                     = 4;
+  ExecMode mode                      = 5;
+  int32 vcpus                        = 6;
+  int32 memory_mb                    = 7;
+  map<string, string> labels         = 8;
+  map<string, string> worker_labels  = 9; // Scheduling affinity.
+}
+
+message GetSessionRequest {
+  string id = 1;
+}
+
+message ListSessionsRequest {
+  SessionStatus status = 1;
+  string worker_id     = 2;
+  int32 limit          = 3;
+  int32 offset         = 4;
+}
+
+message ListSessionsResponse {
+  repeated Session sessions = 1;
+  int32 total               = 2;
+}
+
+message DestroySessionRequest {
+  string id   = 1;
+  bool force  = 2;
+}
+
+message PauseSessionRequest {
+  string id = 1;
+}
+
+message ResumeSessionRequest {
+  string id = 1;
+}
+
+message SetSessionModeRequest {
+  string id     = 1;
+  ExecMode mode = 2;
+}
+
+// ─── Execution messages ────────────────────────────────────
+
+message ExecRequest {
+  string session_id            = 1;
+  repeated Command commands    = 2;
+  bool parallel                = 3;
+}
+
+message GetExecutionRequest {
+  string session_id = 1;
+  string exec_id    = 2;
+}
+
+message ListExecutionsRequest {
+  string session_id = 1;
+  ExecStatus status = 2;
+  int32 limit       = 3;
+  int32 offset      = 4;
+}
+
+message ListExecutionsResponse {
+  repeated Execution executions = 1;
+  int32 total                   = 2;
+}
+
+message CancelExecutionRequest {
+  string session_id = 1;
+  string exec_id    = 2;
+  bool cancel_all   = 3; // If true, cancel all running executions in the session.
+}
+
+message StreamExecOutputRequest {
+  string session_id = 1;
+  string exec_id    = 2;
+  string command_id = 3; // Optional: stream a specific command's output.
+}
+
+message OutputChunk {
+  string command_id = 1;
+  bool is_stderr    = 2;
+  bytes data        = 3;
+}
+
+// ─── Checkpoint messages ───────────────────────────────────
+
+message CreateCheckpointRequest {
+  string session_id   = 1;
+  CheckpointType type = 2;
+  string label        = 3;
+}
+
+message GetCheckpointRequest {
+  string session_id   = 1;
+  string checkpoint_id = 2;
+}
+
+message ListCheckpointsRequest {
+  string session_id = 1;
+}
+
+message RestoreCheckpointRequest {
+  string session_id    = 1;
+  string checkpoint_id = 2;
+}
+
+message DeleteCheckpointRequest {
+  string session_id    = 1;
+  string checkpoint_id = 2;
+}
+
+// ─── Package messages ──────────────────────────────────────
+
+message InstallPackageRequest {
+  string name = 1;
+}
+
+message ListPackagesRequest {}
+
+message ListPackagesResponse {
+  repeated Package packages = 1;
+}
+
+message ValidatePackagesRequest {
+  repeated string packages = 1;
+}
+
+message ValidatePackagesResponse {
+  map<string, bool> results = 1; // package name -> available
+}
+
+// ─── Profile messages ──────────────────────────────────────
+
+message CreateProfileRequest {
+  string name              = 1;
+  repeated string packages = 2;
+}
+
+message GetProfileRequest {
+  string name = 1;
+}
+
+message ListProfilesRequest {}
+
+message ListProfilesResponse {
+  repeated PackageProfile profiles = 1;
+}
+
+message UpdateProfileRequest {
+  string name              = 1;
+  repeated string add      = 2;
+  repeated string remove   = 3;
+}
+
+message DeleteProfileRequest {
+  string name = 1;
+}
+
+// ─── Worker messages ───────────────────────────────────────
+
+message ListWorkersRequest {
+  string provider    = 1;
+  WorkerStatus status = 2;
+  string region      = 3;
+  int32 limit        = 4;
+  int32 offset       = 5;
+}
+
+message ListWorkersResponse {
+  repeated Worker workers = 1;
+  int32 total             = 2;
+}
+
+message GetWorkerRequest {
+  string id = 1;
+}
+
+message DrainWorkerRequest {
+  string id     = 1;
+  int32 timeout_seconds = 2;
+}
+
+message RemoveWorkerRequest {
+  string id   = 1;
+  bool force  = 2;
+}

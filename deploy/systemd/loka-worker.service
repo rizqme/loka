@@ -1,0 +1,23 @@
+[Unit]
+Description=LOKA Worker Agent
+Documentation=https://github.com/lokahq/loka
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/loka-worker
+Environment=LOKA_WORKER_CONFIG=/etc/loka/worker.yaml
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+LimitNPROC=4096
+
+# Worker needs KVM access — cannot run as unprivileged user with full hardening.
+# Run as root but with limited capabilities.
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+ProtectHome=yes
+ReadWritePaths=/var/loka
+
+[Install]
+WantedBy=multi-user.target

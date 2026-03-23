@@ -1,0 +1,28 @@
+# LOKA Control Plane Configuration — HA Mode (Production)
+mode: ha
+
+listen_addr: ":8080"
+grpc_addr: ":9090"
+
+database:
+  driver: postgres
+  dsn: "postgres://loka:loka@localhost:5432/loka?sslmode=disable"
+
+coordinator:
+  type: redis
+  address: "localhost:6379"
+  # sentinel_master: "loka"
+  # password: ""
+
+objectstore:
+  type: s3
+  bucket: "loka-artifacts"
+  region: "us-east-1"
+
+scheduler:
+  strategy: spread
+
+tls:
+  enabled: false
+  # cert_file: /etc/loka/tls.crt
+  # key_file: /etc/loka/tls.key

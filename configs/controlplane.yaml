@@ -1,0 +1,22 @@
+# LOKA Control Plane Configuration — Single Node (Dev Mode)
+mode: single
+
+listen_addr: ":8080"
+grpc_addr: ":9090"
+
+database:
+  driver: sqlite
+  dsn: "loka.db"
+
+coordinator:
+  type: local
+
+objectstore:
+  type: local
+  path: "/tmp/loka-data/artifacts"
+
+scheduler:
+  strategy: spread
+
+tls:
+  enabled: false

@@ -1,0 +1,89 @@
+package api
+
+import (
+	"net/http"
+	"time"
+
+	"github.com/rizqme/loka/internal/loka"
+)
+
+// registerInternalRoutes adds internal API routes used by workers.
+func (s *Server) registerInternalRoutes() {
+	s.router.Post("/api/internal/workers/register", s.internalRegisterWorker)
+	s.router.Post("/api/internal/exec/complete", s.internalExecComplete)
+	s.router.Post("/api/internal/sessions/status", s.internalSessionStatus)
+}
+
+type registerWorkerReq struct {
+	Hostname string                `json:"hostname"`
+	Provider string                `json:"provider"`
+	Capacity loka.ResourceCapacity `json:"capacity"`
+	Labels   map[string]string     `json:"labels"`
+}
+
+func (s *Server) internalRegisterWorker(w http.ResponseWriter, r *http.Request) {
+	var req registerWorkerReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	worker, err := s.workerRegistry.Register(r.Context(),
+		req.Hostname, "", req.Provider, "", "", "dev",
+		req.Capacity, req.Labels, false,
+	)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"worker_id": worker.ID})
+}
+
+type execCompleteReq struct {
+	SessionID string               `json:"session_id"`
+	ExecID    string               `json:"exec_id"`
+	Status    string               `json:"status"`
+	Results   []loka.CommandResult `json:"results"`
+	Error     string               `json:"error"`
+}
+
+func (s *Server) internalExecComplete(w http.ResponseWriter, r *http.Request) {
+	var req execCompleteReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	if err := s.sessionManager.CompleteExecution(r.Context(), req.ExecID,
+		loka.ExecStatus(req.Status), req.Results, req.Error); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+type sessionStatusReq struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+}
+
+func (s *Server) internalSessionStatus(w http.ResponseWriter, r *http.Request) {
+	var req sessionStatusReq
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request")
+		return
+	}
+
+	sess, err := s.store.Sessions().Get(r.Context(), req.SessionID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	sess.Status = loka.SessionStatus(req.Status)
+	sess.UpdatedAt = time.Now()
+	if err := s.store.Sessions().Update(r.Context(), sess); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+}
