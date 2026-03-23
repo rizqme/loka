@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"time"
 
+	"github.com/mdlayher/vsock"
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/worker/vm"
 )
@@ -47,7 +49,14 @@ func NewServer(policy loka.ExecPolicy, mode loka.ExecMode, logger *slog.Logger) 
 // For local testing, it listens on a unix domain socket.
 func (s *Server) ListenAndServe(listenAddr string) error {
 	var err error
-	s.listener, err = net.Listen("unix", listenAddr)
+	if strings.HasPrefix(listenAddr, "vsock:") {
+		// Listen on vsock inside the VM. Format: "vsock:52"
+		var port uint32
+		fmt.Sscanf(listenAddr, "vsock:%d", &port)
+		s.listener, err = vsock.Listen(port, nil)
+	} else {
+		s.listener, err = net.Listen("unix", listenAddr)
+	}
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}

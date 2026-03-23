@@ -34,11 +34,15 @@ func main() {
 	}
 
 	// Determine listen address.
-	// In production: vsock listener on port 52.
+	// Inside a Firecracker VM: vsock port 52 (detected by /dev/vsock).
 	// For local testing: unix domain socket.
 	listenAddr := os.Getenv("LOKA_SUPERVISOR_SOCK")
 	if listenAddr == "" {
-		listenAddr = "/tmp/loka-supervisor.sock"
+		if _, err := os.Stat("/dev/vsock"); err == nil {
+			listenAddr = "vsock:52"
+		} else {
+			listenAddr = "/tmp/loka-supervisor.sock"
+		}
 	}
 
 	server := supervisor.NewServer(policy, mode, logger)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
@@ -283,7 +284,25 @@ func (e *Executor) ListProcesses() []*RunningProcess {
 func (e *Executor) startProcess(ctx context.Context, cmd loka.Command) (*RunningProcess, error) {
 	procCtx, cancel := context.WithCancel(ctx)
 
-	osCmd := exec.CommandContext(procCtx, cmd.Command, cmd.Args...)
+	// Resolve binary path using the restricted PATH (not the supervisor's own PATH).
+	cmdPath := cmd.Command
+	if !filepath.IsAbs(cmdPath) {
+		env := e.proxy.ProcessEnv(cmd)
+		for _, e := range env {
+			if len(e) > 5 && e[:5] == "PATH=" {
+				for _, dir := range filepath.SplitList(e[5:]) {
+					candidate := filepath.Join(dir, cmdPath)
+					if _, err := os.Stat(candidate); err == nil {
+						cmdPath = candidate
+						break
+					}
+				}
+				break
+			}
+		}
+	}
+
+	osCmd := exec.CommandContext(procCtx, cmdPath, cmd.Args...)
 	if cmd.Workdir != "" {
 		osCmd.Dir = cmd.Workdir
 	}

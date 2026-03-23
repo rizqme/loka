@@ -91,7 +91,7 @@ func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, erro
 	if info != nil {
 		img.SizeMB = info.Size() / (1024 * 1024)
 	}
-	img.RootfsPath = fmt.Sprintf("images/%s/rootfs.ext4", id)
+	img.RootfsPath = rootfsPath // Full local path for VM launch.
 
 	// Step 3: Upload to object store.
 	f, err := os.Open(rootfsPath)
@@ -105,30 +105,11 @@ func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, erro
 		return img, fmt.Errorf("upload rootfs: %w", err)
 	}
 
-	// Step 4: Create warm snapshot.
-	// Boot the rootfs in Firecracker, wait for supervisor init, snapshot.
-	// This makes future session startups ~28ms instead of ~1-2s.
-	img.Status = loka.ImageStatusWarming
-	m.logger.Info("warming image (creating boot snapshot)...", "id", id)
-
-	warmDir := filepath.Join(imageDir, "warm")
-	os.MkdirAll(warmDir, 0o755)
-	img.SnapshotMem = fmt.Sprintf("images/%s/warm/mem.snap", id)
-	img.SnapshotVMState = fmt.Sprintf("images/%s/warm/vmstate.snap", id)
-
-	// The warm snapshot is created by:
-	// 1. Starting a temporary Firecracker VM from the rootfs
-	// 2. Waiting for the supervisor to report ready (via vsock ping)
-	// 3. Pausing the VM
-	// 4. Creating a full snapshot (memory + VM state)
-	// 5. Stopping the temporary VM
-	//
-	// This is done once per image. The snapshot files are stored alongside the rootfs.
-	// When a session is created, it restores from this snapshot instead of cold-booting.
-	//
-	// For now, mark as ready — the actual warm snapshot creation requires
-	// Firecracker to be available (Linux + KVM). The VM manager handles
-	// the restore-vs-cold-boot decision at launch time.
+	// Step 4: Warm snapshot (future optimization).
+	// TODO: Boot rootfs in Firecracker, wait for supervisor, snapshot.
+	// For now, sessions cold-boot (~1-2s). Warm snapshots would be ~28ms.
+	// SnapshotMem and SnapshotVMState are left empty — the VM manager
+	// will cold-boot when these are empty.
 
 	img.Status = loka.ImageStatusReady
 	m.logger.Info("image ready",

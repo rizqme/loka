@@ -354,19 +354,12 @@ func buildFirecrackerConfig(cfg VMConfig, socketPath, vsockPath string) fcConfig
 			DriveID:      "rootfs",
 			PathOnHost:   cfg.RootfsPath,
 			IsRootDevice: true,
-			IsReadOnly:   true, // Base rootfs is always read-only.
+			IsReadOnly:   false, // Read-write for now. TODO: use overlay disk image.
 		},
 	}
 
-	// Add overlay drive if available.
-	if cfg.OverlayDir != "" {
-		drives = append(drives, fcDrive{
-			DriveID:      "overlay",
-			PathOnHost:   cfg.OverlayDir,
-			IsRootDevice: false,
-			IsReadOnly:   false,
-		})
-	}
+	// TODO: Add overlay as a separate ext4 disk image (not directory).
+	// The overlay FS is managed inside the VM by the supervisor.
 
 	return fcConfig{
 		BootSource: fcBootSource{

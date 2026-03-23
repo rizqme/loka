@@ -141,13 +141,30 @@ func (c *VsockClient) Ping() error {
 // ── Low-Level Transport ─────────────────────────────────
 
 func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessage, error) {
-	// Connect to the vsock UDS.
-	conn, err := net.DialTimeout("unix", c.socketPath+"_52", c.timeout)
+	// Connect to the Firecracker vsock UDS and send CONNECT command.
+	// Firecracker's vsock host-side protocol: connect to UDS, send "CONNECT <port>\n",
+	// then receive "OK <port>\n" — after that it's a raw bidirectional stream.
+	conn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
 	if err != nil {
 		return nil, fmt.Errorf("vsock connect: %w", err)
 	}
 	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(c.timeout))
+
+	// Firecracker vsock handshake.
+	if _, err := fmt.Fprintf(conn, "CONNECT 52\n"); err != nil {
+		return nil, fmt.Errorf("vsock CONNECT: %w", err)
+	}
+	// Read "OK <port>\n" response.
+	buf := make([]byte, 32)
+	n, err := conn.Read(buf)
+	if err != nil {
+		return nil, fmt.Errorf("vsock handshake read: %w", err)
+	}
+	resp := string(buf[:n])
+	if len(resp) < 2 || resp[:2] != "OK" {
+		return nil, fmt.Errorf("vsock handshake failed: %s", resp)
+	}
 
 	// Send request.
 	req := RPCRequest{
@@ -160,16 +177,16 @@ func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessa
 		return nil, fmt.Errorf("vsock write: %w", err)
 	}
 
-	// Read response.
-	var resp RPCResponse
+	// Read RPC response.
+	var rpcResp RPCResponse
 	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&resp); err != nil {
+	if err := decoder.Decode(&rpcResp); err != nil {
 		return nil, fmt.Errorf("vsock read: %w", err)
 	}
 
-	if resp.Error != nil {
-		return nil, fmt.Errorf("supervisor error: %s", resp.Error.Message)
+	if rpcResp.Error != nil {
+		return nil, fmt.Errorf("supervisor error: %s", rpcResp.Error.Message)
 	}
 
-	return resp.Result, nil
+	return rpcResp.Result, nil
 }
