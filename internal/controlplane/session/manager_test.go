@@ -1827,3 +1827,47 @@ func TestDownloadArtifact_SessionNotFound(t *testing.T) {
 		t.Fatal("expected error for non-existent session")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Purge tests
+// ---------------------------------------------------------------------------
+
+func TestPurgeSession(t *testing.T) {
+	te := setupTestManager(t)
+	ctx := context.Background()
+
+	// Create a running session with an execution.
+	s := te.createRunningSession(t, CreateOpts{Name: "purge-me", ImageRef: "ubuntu:22.04"})
+
+	// Execute a command to create an execution record.
+	_, err := te.manager.Exec(ctx, s.ID, []loka.Command{
+		{ID: "c1", Command: "echo", Args: []string{"hello"}},
+	}, false)
+	if err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+	te.drainWorkerCommands(t)
+
+	// Purge the session.
+	err = te.manager.Purge(ctx, s.ID)
+	if err != nil {
+		t.Fatalf("Purge: %v", err)
+	}
+	te.drainWorkerCommands(t)
+
+	// Verify session is deleted from the store.
+	_, err = te.store.Sessions().Get(ctx, s.ID)
+	if err == nil {
+		t.Error("session should have been deleted after purge")
+	}
+}
+
+func TestPurgeSession_NotFound(t *testing.T) {
+	te := setupTestManager(t)
+	ctx := context.Background()
+
+	err := te.manager.Purge(ctx, "nonexistent-session-id")
+	if err == nil {
+		t.Error("expected error when purging non-existent session")
+	}
+}

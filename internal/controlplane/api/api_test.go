@@ -10,6 +10,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/vyprai/loka/internal/config"
 	"github.com/vyprai/loka/internal/controlplane/image"
 	"github.com/vyprai/loka/internal/controlplane/scheduler"
 	"github.com/vyprai/loka/internal/controlplane/session"
@@ -1378,5 +1379,105 @@ func TestRESTListCheckpointArtifacts_WrongSession(t *testing.T) {
 		// For now, just verify the test runs.
 	} else if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 (checkpoint belongs to different session), got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Admin GC / Retention endpoints
+// ---------------------------------------------------------------------------
+
+// mockGCRunner implements GCRunner for testing admin endpoints.
+type mockGCRunner struct {
+	sweepCalled bool
+	result      any
+}
+
+func (m *mockGCRunner) Sweep(ctx context.Context) {
+	m.sweepCalled = true
+}
+
+func (m *mockGCRunner) LastResult() any {
+	return m.result
+}
+
+func TestRESTAdminGCStatus_NoGC(t *testing.T) {
+	// Without a GC configured, the endpoint should return 503.
+	ts := setupTestServer(t)
+
+	rec := ts.doRequest(t, http.MethodGet, "/api/v1/admin/gc/status", nil, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when GC not configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRESTAdminGCStatus_WithGC(t *testing.T) {
+	ts := setupTestServer(t)
+
+	gc := &mockGCRunner{result: nil}
+	ts.server.SetGC(gc)
+
+	rec := ts.doRequest(t, http.MethodGet, "/api/v1/admin/gc/status", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	decodeBody(t, rec, &body)
+	if body["status"] != "no sweep has run yet" {
+		t.Errorf("expected 'no sweep has run yet', got %v", body["status"])
+	}
+}
+
+func TestRESTAdminRetention(t *testing.T) {
+	ret := config.RetentionConfig{
+		SessionTTL:      "168h",
+		CheckpointTTL:   "168h",
+		ExecutionTTL:    "72h",
+		TokenTTL:        "24h",
+		ImageTTL:        "720h",
+		CleanupInterval: "1h",
+	}
+	ts := setupTestServer(t, ServerOpts{Retention: ret})
+
+	rec := ts.doRequest(t, http.MethodGet, "/api/v1/admin/retention", nil, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	decodeBody(t, rec, &body)
+	// RetentionConfig uses yaml tags, so JSON encoding uses Go field names.
+	if body["SessionTTL"] != "168h" {
+		t.Errorf("SessionTTL = %v, want 168h", body["SessionTTL"])
+	}
+	if body["ExecutionTTL"] != "72h" {
+		t.Errorf("ExecutionTTL = %v, want 72h", body["ExecutionTTL"])
+	}
+	if body["TokenTTL"] != "24h" {
+		t.Errorf("TokenTTL = %v, want 24h", body["TokenTTL"])
+	}
+}
+
+func TestRESTAdminTriggerGC_NoGC(t *testing.T) {
+	ts := setupTestServer(t)
+
+	rec := ts.doRequest(t, http.MethodPost, "/api/v1/admin/gc", nil, nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when GC not configured, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestRESTAdminTriggerGC(t *testing.T) {
+	ts := setupTestServer(t)
+
+	gc := &mockGCRunner{}
+	ts.server.SetGC(gc)
+
+	rec := ts.doRequest(t, http.MethodPost, "/api/v1/admin/gc", nil, nil)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	decodeBody(t, rec, &body)
+	if body["status"] != "sweep started" {
+		t.Errorf("expected 'sweep started', got %v", body["status"])
 	}
 }

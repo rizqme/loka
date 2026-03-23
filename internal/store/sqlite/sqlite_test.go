@@ -1320,3 +1320,239 @@ func TestWorkerUpdateHeartbeatChangesLastSeen(t *testing.T) {
 		t.Errorf("status = %s, want ready", got.Status)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// GC cleanup method tests
+// ---------------------------------------------------------------------------
+
+func TestDeleteTerminatedBefore(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	recentTime := time.Now()
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	// 1 old terminated session.
+	oldTerminated := &loka.Session{
+		ID: uuid.New().String(), Name: "old-terminated", Status: loka.SessionStatusTerminated,
+		Mode: loka.ModeExplore, Labels: map[string]string{}, VCPUs: 1, MemoryMB: 512,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	// 1 recent terminated session.
+	recentTerminated := &loka.Session{
+		ID: uuid.New().String(), Name: "recent-terminated", Status: loka.SessionStatusTerminated,
+		Mode: loka.ModeExplore, Labels: map[string]string{}, VCPUs: 1, MemoryMB: 512,
+		CreatedAt: recentTime, UpdatedAt: recentTime,
+	}
+	// 1 running session (old but running, should not be deleted).
+	running := &loka.Session{
+		ID: uuid.New().String(), Name: "running", Status: loka.SessionStatusRunning,
+		Mode: loka.ModeExplore, Labels: map[string]string{}, VCPUs: 1, MemoryMB: 512,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	for _, sess := range []*loka.Session{oldTerminated, recentTerminated, running} {
+		if err := s.Sessions().Create(ctx, sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := s.Sessions().DeleteTerminatedBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("DeleteTerminatedBefore count = %d, want 1", n)
+	}
+
+	// Old terminated should be gone.
+	_, err = s.Sessions().Get(ctx, oldTerminated.ID)
+	if err == nil {
+		t.Error("old terminated session should have been deleted")
+	}
+
+	// Recent terminated should still exist.
+	_, err = s.Sessions().Get(ctx, recentTerminated.ID)
+	if err != nil {
+		t.Error("recent terminated session should still exist")
+	}
+
+	// Running should still exist.
+	_, err = s.Sessions().Get(ctx, running.ID)
+	if err != nil {
+		t.Error("running session should still exist")
+	}
+}
+
+func TestDeleteTerminatedBefore_NoneEligible(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	recentTime := time.Now()
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	sess := &loka.Session{
+		ID: uuid.New().String(), Name: "recent-terminated", Status: loka.SessionStatusTerminated,
+		Mode: loka.ModeExplore, Labels: map[string]string{}, VCPUs: 1, MemoryMB: 512,
+		CreatedAt: recentTime, UpdatedAt: recentTime,
+	}
+	if err := s.Sessions().Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.Sessions().DeleteTerminatedBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("DeleteTerminatedBefore count = %d, want 0", n)
+	}
+}
+
+func TestDeleteCompletedBefore(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	sess := createTestSession(t, s, "exec-parent", loka.SessionStatusRunning, "")
+
+	// 1 old success execution.
+	oldSuccess := &loka.Execution{
+		ID: uuid.New().String(), SessionID: sess.ID, Status: loka.ExecStatusSuccess,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	// 1 old failed execution.
+	oldFailed := &loka.Execution{
+		ID: uuid.New().String(), SessionID: sess.ID, Status: loka.ExecStatusFailed,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	// 1 running execution.
+	runningExec := &loka.Execution{
+		ID: uuid.New().String(), SessionID: sess.ID, Status: loka.ExecStatusRunning,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	for _, e := range []*loka.Execution{oldSuccess, oldFailed, runningExec} {
+		if err := s.Executions().Create(ctx, e); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := s.Executions().DeleteCompletedBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Errorf("DeleteCompletedBefore count = %d, want 2", n)
+	}
+
+	// Running execution should still exist.
+	_, err = s.Executions().Get(ctx, runningExec.ID)
+	if err != nil {
+		t.Error("running execution should still exist")
+	}
+}
+
+func TestDeleteCompletedBefore_KeepsRunning(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	sess := createTestSession(t, s, "exec-running", loka.SessionStatusRunning, "")
+
+	runningExec := &loka.Execution{
+		ID: uuid.New().String(), SessionID: sess.ID, Status: loka.ExecStatusRunning,
+		CreatedAt: oldTime, UpdatedAt: oldTime,
+	}
+	if err := s.Executions().Create(ctx, runningExec); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.Executions().DeleteCompletedBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("DeleteCompletedBefore count = %d, want 0", n)
+	}
+
+	_, err = s.Executions().Get(ctx, runningExec.ID)
+	if err != nil {
+		t.Error("running execution should not have been deleted")
+	}
+}
+
+func TestDeleteExpiredBefore(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	oldTime := time.Now().Add(-48 * time.Hour)
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	// 1 expired token (expires_at in the past, before cutoff).
+	expired := &loka.WorkerToken{
+		ID: uuid.New().String(), Name: "expired", Token: loka.GenerateToken(),
+		ExpiresAt: oldTime, CreatedAt: oldTime,
+	}
+	// 1 valid token (expires_at in the future).
+	valid := &loka.WorkerToken{
+		ID: uuid.New().String(), Name: "valid", Token: loka.GenerateToken(),
+		ExpiresAt: time.Now().Add(24 * time.Hour), CreatedAt: time.Now(),
+	}
+	for _, tok := range []*loka.WorkerToken{expired, valid} {
+		if err := s.Tokens().Create(ctx, tok); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	n, err := s.Tokens().DeleteExpiredBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("DeleteExpiredBefore count = %d, want 1", n)
+	}
+
+	// Expired token should be gone.
+	_, err = s.Tokens().Get(ctx, expired.ID)
+	if err == nil {
+		t.Error("expired token should have been deleted")
+	}
+
+	// Valid token should still exist.
+	_, err = s.Tokens().Get(ctx, valid.ID)
+	if err != nil {
+		t.Error("valid token should still exist")
+	}
+}
+
+func TestDeleteExpiredBefore_KeepsValid(t *testing.T) {
+	s := setupTestDB(t)
+	ctx := context.Background()
+
+	cutoff := time.Now().Add(-24 * time.Hour)
+
+	valid := &loka.WorkerToken{
+		ID: uuid.New().String(), Name: "valid", Token: loka.GenerateToken(),
+		ExpiresAt: time.Now().Add(24 * time.Hour), CreatedAt: time.Now(),
+	}
+	if err := s.Tokens().Create(ctx, valid); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := s.Tokens().DeleteExpiredBefore(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Errorf("DeleteExpiredBefore count = %d, want 0", n)
+	}
+
+	_, err = s.Tokens().Get(ctx, valid.ID)
+	if err != nil {
+		t.Error("valid token should not have been deleted")
+	}
+}

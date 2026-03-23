@@ -259,6 +259,67 @@ labels:
 	}
 }
 
+// ---------------------------------------------------------------------------
+// RetentionConfig defaults
+// ---------------------------------------------------------------------------
+
+func TestRetentionDefaults(t *testing.T) {
+	var c ControlPlaneConfig
+	c.Defaults()
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"SessionTTL", c.Retention.SessionTTL, "168h"},
+		{"CheckpointTTL", c.Retention.CheckpointTTL, "168h"},
+		{"ExecutionTTL", c.Retention.ExecutionTTL, "72h"},
+		{"TokenTTL", c.Retention.TokenTTL, "24h"},
+		{"ImageTTL", c.Retention.ImageTTL, "720h"},
+		{"CleanupInterval", c.Retention.CleanupInterval, "1h"},
+	}
+
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Errorf("Retention.%s = %q, want %q", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
+func TestRetentionPreservesSetValues(t *testing.T) {
+	c := ControlPlaneConfig{
+		Retention: RetentionConfig{
+			SessionTTL:      "48h",
+			CheckpointTTL:   "96h",
+			ExecutionTTL:    "12h",
+			TokenTTL:        "6h",
+			ImageTTL:        "360h",
+			CleanupInterval: "30m",
+		},
+	}
+	c.Defaults()
+
+	checks := []struct {
+		name string
+		got  string
+		want string
+	}{
+		{"SessionTTL", c.Retention.SessionTTL, "48h"},
+		{"CheckpointTTL", c.Retention.CheckpointTTL, "96h"},
+		{"ExecutionTTL", c.Retention.ExecutionTTL, "12h"},
+		{"TokenTTL", c.Retention.TokenTTL, "6h"},
+		{"ImageTTL", c.Retention.ImageTTL, "360h"},
+		{"CleanupInterval", c.Retention.CleanupInterval, "30m"},
+	}
+
+	for _, tc := range checks {
+		if tc.got != tc.want {
+			t.Errorf("Retention.%s = %q after Defaults(), want %q (should preserve set values)", tc.name, tc.got, tc.want)
+		}
+	}
+}
+
 func TestLoadNonexistentFile(t *testing.T) {
 	var c ControlPlaneConfig
 	err := Load("/nonexistent/path.yaml", &c)
