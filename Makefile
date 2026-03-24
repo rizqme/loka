@@ -98,8 +98,7 @@ ifeq ($(shell uname -s),Darwin)
 		limactl stop loka --force 2>/dev/null || true; \
 		limactl delete loka --force 2>/dev/null || true; \
 	fi
-	@echo "  Creating Lima VM..."
-	@bash scripts/install.sh 2>&1 | grep -E "✓|Creating|Starting|ready|Done|installed|LOKA"
+	@bash scripts/setup-lima-vm.sh
 	@echo ""
 	@echo "  LOKA installed. Run: loka deploy local"
 else
