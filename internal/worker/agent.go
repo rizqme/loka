@@ -136,12 +136,16 @@ func (a *Agent) LaunchSession(ctx context.Context, sessionID string, opts Launch
 	// Connect to the supervisor inside the VM via vsock.
 	vsock := vm.NewVsockClient(microVM.VsockPath)
 
-	// Wait for supervisor to be ready.
+	// Wait for supervisor to be ready with exponential backoff.
+	backoff := 100 * time.Millisecond
 	for i := 0; i < 50; i++ {
 		if err := vsock.Ping(); err == nil {
 			break
 		}
-		time.Sleep(100 * time.Millisecond)
+		time.Sleep(backoff)
+		if backoff < 2*time.Second {
+			backoff = time.Duration(float64(backoff) * 1.5)
+		}
 	}
 
 	// Send exec policy and mode to the supervisor.
@@ -268,7 +272,11 @@ func (a *Agent) AddToWhitelist(sessionID, command string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
-	sess.Policy.AllowedCommands = append(sess.Policy.AllowedCommands, command)
+	// Make a copy to avoid concurrent slice write races.
+	newAllowed := make([]string, len(sess.Policy.AllowedCommands), len(sess.Policy.AllowedCommands)+1)
+	copy(newAllowed, sess.Policy.AllowedCommands)
+	newAllowed = append(newAllowed, command)
+	sess.Policy.AllowedCommands = newAllowed
 	return sess.Vsock.SetPolicy(sess.Policy)
 }
 

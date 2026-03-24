@@ -406,11 +406,18 @@ func (p *DomainProxy) proxyWebSocket(w http.ResponseWriter, r *http.Request, tar
 	// Forward the original request to the backend.
 	r.Write(backendConn)
 
-	// Bidirectional copy.
-	done := make(chan struct{}, 2)
-	go func() { io.Copy(backendConn, clientBuf); done <- struct{}{} }()
-	go func() { io.Copy(clientConn, backendConn); done <- struct{}{} }()
-	<-done
+	// Bidirectional copy — wait for both directions to finish.
+	var copyWg sync.WaitGroup
+	copyWg.Add(2)
+	go func() {
+		defer copyWg.Done()
+		io.Copy(backendConn, clientBuf)
+	}()
+	go func() {
+		defer copyWg.Done()
+		io.Copy(clientConn, backendConn)
+	}()
+	copyWg.Wait()
 }
 
 func isWebSocket(r *http.Request) bool {

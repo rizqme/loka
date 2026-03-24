@@ -19,6 +19,9 @@ type RecipeContext struct {
 }
 
 // NewRecipeContext creates a new JS execution context for recipe scripts.
+// A new goja runtime is created per invocation. This is acceptable since
+// recipe matching only runs at deploy time, not on the hot path. Pooling
+// would add complexity for minimal gain.
 func NewRecipeContext(projectDir string, r *Recipe) *RecipeContext {
 	return &RecipeContext{
 		projectDir: projectDir,

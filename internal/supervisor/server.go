@@ -90,8 +90,12 @@ func (s *Server) Stop() {
 }
 
 func (s *Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
-	conn.SetDeadline(time.Now().Add(5 * time.Minute))
+	defer func() {
+		if r := recover(); r != nil {
+			s.logger.Error("panic in connection handler", "panic", r)
+		}
+		conn.Close()
+	}()
 
 	decoder := json.NewDecoder(conn)
 	encoder := json.NewEncoder(conn)
@@ -99,7 +103,17 @@ func (s *Server) handleConnection(conn net.Conn) {
 	var req vm.RPCRequest
 	if err := decoder.Decode(&req); err != nil {
 		s.logger.Error("decode request", "error", err)
+		errResp := vm.RPCResponse{Error: &vm.RPCError{Code: -1, Message: fmt.Sprintf("invalid request: %v", err)}}
+		encoder.Encode(errResp)
 		return
+	}
+
+	// Set deadline based on method: long-running operations get more time.
+	switch req.Method {
+	case "service_start", "exec":
+		conn.SetDeadline(time.Now().Add(30 * time.Minute))
+	default:
+		conn.SetDeadline(time.Now().Add(5 * time.Minute))
 	}
 
 	resp := s.handleRPC(req)

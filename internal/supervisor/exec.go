@@ -229,17 +229,24 @@ func (e *Executor) ExecuteParallel(ctx context.Context, commands []loka.Command)
 		}
 	}
 
-	// Phase 3: All approved — start all processes.
+	// Phase 3: All approved — start all processes, collecting any errors.
+	// Start all processes first, then cancel all if any failed to start.
+	// This avoids a race where a process could start after the cancel loop.
 	procs := make([]*RunningProcess, 0, len(commands))
+	var startErrors []error
 	for _, cmd := range commands {
 		proc, err := e.startProcess(ctx, cmd)
 		if err != nil {
-			for _, p := range procs {
-				p.Cancel()
-			}
-			return nil, VerdictBlocked, fmt.Errorf("start command %s: %w", cmd.ID, err)
+			startErrors = append(startErrors, fmt.Errorf("start command %s: %w", cmd.ID, err))
+			continue
 		}
 		procs = append(procs, proc)
+	}
+	if len(startErrors) > 0 {
+		for _, p := range procs {
+			p.Cancel()
+		}
+		return nil, VerdictBlocked, startErrors[0]
 	}
 
 	cmdResults := make([]loka.CommandResult, len(procs))

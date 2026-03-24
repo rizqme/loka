@@ -105,10 +105,12 @@ func (r *serviceRepo) List(ctx context.Context, f store.ServiceFilter) ([]*loka.
 
 	query := serviceSelectSQL + where + ` ORDER BY created_at DESC`
 	if f.Limit > 0 {
-		query += fmt.Sprintf(` LIMIT %d`, f.Limit)
+		query += ` LIMIT ?`
+		args = append(args, f.Limit)
 	}
 	if f.Offset > 0 {
-		query += fmt.Sprintf(` OFFSET %d`, f.Offset)
+		query += ` OFFSET ?`
+		args = append(args, f.Offset)
 	}
 
 	rows, err := r.db.QueryContext(ctx, query, args...)
@@ -158,12 +160,24 @@ func scanService(row *sql.Row) (*loka.Service, error) {
 	}
 	svc.Status = loka.ServiceStatus(status)
 	svc.Ready = ready != 0
-	json.Unmarshal([]byte(argsJSON), &svc.Args)
-	json.Unmarshal([]byte(envJSON), &svc.Env)
-	json.Unmarshal([]byte(routesJSON), &svc.Routes)
-	json.Unmarshal([]byte(labelsJSON), &svc.Labels)
-	json.Unmarshal([]byte(mountsJSON), &svc.Mounts)
-	json.Unmarshal([]byte(autoscaleJSON), &svc.Autoscale)
+	if err := json.Unmarshal([]byte(argsJSON), &svc.Args); err != nil {
+		return nil, fmt.Errorf("unmarshal args: %w", err)
+	}
+	if err := json.Unmarshal([]byte(envJSON), &svc.Env); err != nil {
+		return nil, fmt.Errorf("unmarshal env: %w", err)
+	}
+	if err := json.Unmarshal([]byte(routesJSON), &svc.Routes); err != nil {
+		return nil, fmt.Errorf("unmarshal routes: %w", err)
+	}
+	if err := json.Unmarshal([]byte(labelsJSON), &svc.Labels); err != nil {
+		return nil, fmt.Errorf("unmarshal labels: %w", err)
+	}
+	if err := json.Unmarshal([]byte(mountsJSON), &svc.Mounts); err != nil {
+		return nil, fmt.Errorf("unmarshal mounts: %w", err)
+	}
+	if err := json.Unmarshal([]byte(autoscaleJSON), &svc.Autoscale); err != nil {
+		return nil, fmt.Errorf("unmarshal autoscale: %w", err)
+	}
 	svc.LastActivity, _ = time.Parse(time.RFC3339, lastActivity)
 	svc.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	svc.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
@@ -190,12 +204,24 @@ func scanServiceRows(rows *sql.Rows) (*loka.Service, error) {
 	}
 	svc.Status = loka.ServiceStatus(status)
 	svc.Ready = ready != 0
-	json.Unmarshal([]byte(argsJSON), &svc.Args)
-	json.Unmarshal([]byte(envJSON), &svc.Env)
-	json.Unmarshal([]byte(routesJSON), &svc.Routes)
-	json.Unmarshal([]byte(labelsJSON), &svc.Labels)
-	json.Unmarshal([]byte(mountsJSON), &svc.Mounts)
-	json.Unmarshal([]byte(autoscaleJSON), &svc.Autoscale)
+	if err := json.Unmarshal([]byte(argsJSON), &svc.Args); err != nil {
+		return nil, fmt.Errorf("unmarshal args: %w", err)
+	}
+	if err := json.Unmarshal([]byte(envJSON), &svc.Env); err != nil {
+		return nil, fmt.Errorf("unmarshal env: %w", err)
+	}
+	if err := json.Unmarshal([]byte(routesJSON), &svc.Routes); err != nil {
+		return nil, fmt.Errorf("unmarshal routes: %w", err)
+	}
+	if err := json.Unmarshal([]byte(labelsJSON), &svc.Labels); err != nil {
+		return nil, fmt.Errorf("unmarshal labels: %w", err)
+	}
+	if err := json.Unmarshal([]byte(mountsJSON), &svc.Mounts); err != nil {
+		return nil, fmt.Errorf("unmarshal mounts: %w", err)
+	}
+	if err := json.Unmarshal([]byte(autoscaleJSON), &svc.Autoscale); err != nil {
+		return nil, fmt.Errorf("unmarshal autoscale: %w", err)
+	}
 	svc.LastActivity, _ = time.Parse(time.RFC3339, lastActivity)
 	svc.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
 	svc.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)

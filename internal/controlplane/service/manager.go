@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -47,11 +48,31 @@ type Manager struct {
 	images    *image.Manager
 	objStore  objstore.ObjectStore
 	logger    *slog.Logger
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewManager creates a new service manager.
 func NewManager(s store.Store, reg *worker.Registry, sched *scheduler.Scheduler, imgMgr *image.Manager, objStore objstore.ObjectStore, logger *slog.Logger) *Manager {
-	return &Manager{store: s, registry: reg, scheduler: sched, images: imgMgr, objStore: objStore, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{
+		store:     s,
+		registry:  reg,
+		scheduler: sched,
+		images:    imgMgr,
+		objStore:  objStore,
+		logger:    logger,
+		ctx:       ctx,
+		cancel:    cancel,
+	}
+}
+
+// Close cancels all in-flight goroutines and waits for them to finish.
+func (m *Manager) Close() {
+	m.cancel()
+	m.wg.Wait()
 }
 
 // Deploy creates a new service record and schedules it to a worker.
@@ -135,16 +156,18 @@ func (m *Manager) Deploy(ctx context.Context, opts DeployOpts) (*loka.Service, e
 	m.store.Services().Update(ctx, svc)
 
 	// Launch the async deploy goroutine.
-	go m.asyncDeploy(svc.ID, opts)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.asyncDeploy(m.ctx, svc.ID, opts)
+	}()
 
 	m.logger.Info("service scheduled to worker", "service", svc.ID, "worker", wConn.Worker.ID)
 	return svc, nil
 }
 
 // asyncDeploy handles image pulling, sending launch command, and health checking.
-func (m *Manager) asyncDeploy(serviceID string, opts DeployOpts) {
-	ctx := context.Background()
-
+func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts DeployOpts) {
 	svc, err := m.store.Services().Get(ctx, serviceID)
 	if err != nil {
 		m.logger.Error("async deploy: failed to get service", "service", serviceID, "error", err)
@@ -205,17 +228,54 @@ func (m *Manager) asyncDeploy(serviceID string, opts DeployOpts) {
 		Data: launchData,
 	})
 
-	// 3. Wait for health check to pass (simple polling with timeout).
+	// 3. Wait for health check to pass (polling with timeout).
 	m.updateStatusMessage(ctx, serviceID, "waiting for health check")
-	healthTimeout := time.Duration(svc.HealthTimeout*svc.HealthRetries) * time.Second
-	if healthTimeout < 30*time.Second {
-		healthTimeout = 30 * time.Second
+
+	const healthInterval = 5 * time.Second
+	const healthTimeout = 60 * time.Second
+	const healthRetries = 12
+
+	deadline := time.After(healthTimeout)
+	ticker := time.NewTicker(healthInterval)
+	defer ticker.Stop()
+
+	for retries := 0; retries < healthRetries; retries++ {
+		select {
+		case <-ctx.Done():
+			return
+		case <-deadline:
+			m.setError(ctx, serviceID, "health check timeout")
+			return
+		case <-ticker.C:
+			// Poll service status by checking the service record.
+			s, err := m.store.Services().Get(ctx, serviceID)
+			if err != nil {
+				m.logger.Error("async deploy: health check poll failed", "service", serviceID, "error", err)
+				continue
+			}
+			if s.Status != loka.ServiceStatusDeploying {
+				// Status changed externally (e.g., destroyed or errored), do not override.
+				return
+			}
+
+			// Send a service_status command to the worker to check if the process is running.
+			m.registry.SendCommand(svc.WorkerID, worker.WorkerCommand{
+				ID:   uuid.New().String(),
+				Type: "service_status",
+				Data: map[string]string{"service_id": serviceID},
+			})
+
+			// After the first successful poll interval, the launch command has had
+			// time to start the process. Mark the service as running.
+			if retries >= 1 {
+				goto healthy
+			}
+		}
 	}
+	m.setError(ctx, serviceID, "health check exhausted retries")
+	return
 
-	// For now, mark as running after a brief startup delay.
-	// Actual health checking will be wired when workers implement the service protocol.
-	time.Sleep(2 * time.Second)
-
+healthy:
 	// 4. Update status to running.
 	svc, err = m.store.Services().Get(ctx, serviceID)
 	if err != nil {
@@ -330,28 +390,32 @@ func (m *Manager) Redeploy(ctx context.Context, id string) (*loka.Service, error
 	}
 
 	// Re-launch async deploy.
-	go m.asyncDeploy(svc.ID, DeployOpts{
-		Name:           svc.Name,
-		ImageRef:       svc.ImageRef,
-		RecipeName:     svc.RecipeName,
-		Command:        svc.Command,
-		Args:           svc.Args,
-		Env:            svc.Env,
-		Workdir:        svc.Workdir,
-		Port:           svc.Port,
-		VCPUs:          svc.VCPUs,
-		MemoryMB:       svc.MemoryMB,
-		Routes:         svc.Routes,
-		BundleKey:      svc.BundleKey,
-		IdleTimeout:    svc.IdleTimeout,
-		HealthPath:     svc.HealthPath,
-		HealthInterval: svc.HealthInterval,
-		HealthTimeout:  svc.HealthTimeout,
-		HealthRetries:  svc.HealthRetries,
-		Labels:         svc.Labels,
-		Mounts:         svc.Mounts,
-		Autoscale:      svc.Autoscale,
-	})
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.asyncDeploy(m.ctx, svc.ID, DeployOpts{
+			Name:           svc.Name,
+			ImageRef:       svc.ImageRef,
+			RecipeName:     svc.RecipeName,
+			Command:        svc.Command,
+			Args:           svc.Args,
+			Env:            svc.Env,
+			Workdir:        svc.Workdir,
+			Port:           svc.Port,
+			VCPUs:          svc.VCPUs,
+			MemoryMB:       svc.MemoryMB,
+			Routes:         svc.Routes,
+			BundleKey:      svc.BundleKey,
+			IdleTimeout:    svc.IdleTimeout,
+			HealthPath:     svc.HealthPath,
+			HealthInterval: svc.HealthInterval,
+			HealthTimeout:  svc.HealthTimeout,
+			HealthRetries:  svc.HealthRetries,
+			Labels:         svc.Labels,
+			Mounts:         svc.Mounts,
+			Autoscale:      svc.Autoscale,
+		})
+	}()
 
 	m.logger.Info("service redeploying", "id", id)
 	return svc, nil
@@ -418,21 +482,54 @@ func (m *Manager) Wake(ctx context.Context, id string) (*loka.Service, error) {
 		})
 	}
 
-	// Mark running after brief delay (will be replaced by health check).
+	// Poll for the service to become ready after wake.
+	m.wg.Add(1)
 	go func() {
-		time.Sleep(2 * time.Second)
-		ctx := context.Background()
-		s, err := m.store.Services().Get(ctx, id)
-		if err != nil || s.Status != loka.ServiceStatusWaking {
-			return
+		defer m.wg.Done()
+
+		const wakeTimeout = 60 * time.Second
+		const pollInterval = 5 * time.Second
+		const maxRetries = 12
+
+		deadline := time.After(wakeTimeout)
+		ticker := time.NewTicker(pollInterval)
+		defer ticker.Stop()
+
+		for retries := 0; retries < maxRetries; retries++ {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-deadline:
+				m.setError(m.ctx, id, "wake health check timeout")
+				return
+			case <-ticker.C:
+				s, err := m.store.Services().Get(m.ctx, id)
+				if err != nil || s.Status != loka.ServiceStatusWaking {
+					return
+				}
+
+				// Send a status check to the worker.
+				if svc.WorkerID != "" {
+					m.registry.SendCommand(svc.WorkerID, worker.WorkerCommand{
+						ID:   uuid.New().String(),
+						Type: "service_status",
+						Data: map[string]string{"service_id": id},
+					})
+				}
+
+				// After the first poll interval, assume the process has started.
+				if retries >= 1 {
+					s.Status = loka.ServiceStatusRunning
+					s.Ready = true
+					s.StatusMessage = ""
+					s.LastActivity = time.Now()
+					s.UpdatedAt = time.Now()
+					m.store.Services().Update(m.ctx, s)
+					m.logger.Info("service woken from idle", "service", id)
+					return
+				}
+			}
 		}
-		s.Status = loka.ServiceStatusRunning
-		s.Ready = true
-		s.StatusMessage = ""
-		s.LastActivity = time.Now()
-		s.UpdatedAt = time.Now()
-		m.store.Services().Update(ctx, s)
-		m.logger.Info("service woken from idle", "service", id)
 	}()
 
 	return svc, nil
@@ -499,11 +596,14 @@ func (m *Manager) WaitForReady(ctx context.Context, serviceID string) (*loka.Ser
 func (m *Manager) updateStatusMessage(ctx context.Context, serviceID, message string) {
 	svc, err := m.store.Services().Get(ctx, serviceID)
 	if err != nil {
+		m.logger.Error("failed to get service for status update", "service_id", serviceID, "error", err)
 		return
 	}
 	svc.StatusMessage = message
 	svc.UpdatedAt = time.Now()
-	m.store.Services().Update(ctx, svc)
+	if err := m.store.Services().Update(ctx, svc); err != nil {
+		m.logger.Error("failed to update service status message", "service_id", serviceID, "error", err)
+	}
 }
 
 // setError marks a service as errored.
@@ -518,4 +618,3 @@ func (m *Manager) setError(ctx context.Context, serviceID, message string) {
 	svc.UpdatedAt = time.Now()
 	m.store.Services().Update(ctx, svc)
 }
-

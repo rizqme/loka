@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/vyprai/loka/internal/loka"
 )
 
@@ -121,7 +122,9 @@ func (c *VsockClient) ListPending() ([]PendingInfo, error) {
 		return nil, err
 	}
 	var result []PendingInfo
-	json.Unmarshal(resp, &result)
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return nil, fmt.Errorf("unmarshal list_pending response: %w", err)
+	}
 	return result, nil
 }
 
@@ -218,6 +221,11 @@ func (c *VsockClient) ServiceLogs(lines int) (*ServiceLogsResult, error) {
 
 // ── Low-Level Transport ─────────────────────────────────
 
+// TODO: Each RPC call creates a new vsock connection, which adds latency.
+// A future improvement would be connection pooling — maintain a pool of
+// pre-established connections and reuse them across calls. For now, each
+// connection is properly closed via defer conn.Close() to prevent leaks.
+
 func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessage, error) {
 	// Connect to the Firecracker vsock UDS and send CONNECT command.
 	// Firecracker's vsock host-side protocol: connect to UDS, send "CONNECT <port>\n",
@@ -247,7 +255,7 @@ func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessa
 	// Send request.
 	req := RPCRequest{
 		Method: method,
-		ID:     fmt.Sprintf("%d", time.Now().UnixNano()),
+		ID:     uuid.New().String(),
 		Params: params,
 	}
 	encoder := json.NewEncoder(conn)
