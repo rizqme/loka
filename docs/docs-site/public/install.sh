@@ -42,9 +42,14 @@ setup_sudo() {
     return
   fi
 
+  # If install dir is already writable, no sudo needed.
+  if [ -w "$INSTALL_DIR" ] || mkdir -p "$INSTALL_DIR" 2>/dev/null; then
+    SUDO=""
+    return
+  fi
+
   if command -v sudo &>/dev/null; then
-    # Validate sudo access upfront so it doesn't prompt mid-install.
-    info "This installer needs elevated privileges to install binaries and configure the system."
+    info "This installer needs elevated privileges to install binaries to ${INSTALL_DIR}."
     if ! sudo -v 2>/dev/null; then
       fail "sudo access required. Run with sudo or as root."
     fi
@@ -390,37 +395,24 @@ install_macos() {
     info "Creating Lima VM '${LIMA_INSTANCE}' (this takes a few minutes)..."
     echo ""
 
-    # Determine image URL — use custom LOKA image if available (~50MB),
-    # otherwise fall back to Alpine cloud image (~225MB).
-    local img_base="https://github.com/vyprai/loka/releases"
-    local img_arm64 img_amd64 use_custom=false
-
-    if curl -fsSL -o /dev/null -w '%{http_code}' "${img_base}/latest/download/loka-lima-arm64.qcow2" 2>/dev/null | grep -q 200; then
-      use_custom=true
-      img_arm64="${img_base}/latest/download/loka-lima-arm64.qcow2"
-      img_amd64="${img_base}/latest/download/loka-lima-amd64.qcow2"
-      info "Using custom LOKA image (~50MB)"
-    else
-      img_arm64="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-aarch64-uefi-cloudinit-r0.qcow2"
-      img_amd64="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-x86_64-uefi-cloudinit-r0.qcow2"
-      info "Using Alpine cloud image (~225MB)"
-    fi
-
     local lima_config
     lima_config=$(mktemp)
 
-    # Write Lima config — provision script only runs for Alpine cloud images.
-    # Custom LOKA images come pre-configured.
-    cat > "$lima_config" <<LIMAEOF
-# LOKA Lima VM — minimal Linux with KVM for Firecracker
+    cat > "$lima_config" <<'LIMAEOF'
+# LOKA Lima VM — Alpine Linux with KVM for Firecracker
 
 vmType: vz
 nestedVirtualization: true
 
+# Alpine uses OpenRC, not systemd — disable containerd (we use Docker directly).
+containerd:
+  system: false
+  user: false
+
 images:
-  - location: "${img_arm64}"
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-aarch64-uefi-cloudinit-r0.qcow2"
     arch: "aarch64"
-  - location: "${img_amd64}"
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-x86_64-uefi-cloudinit-r0.qcow2"
     arch: "x86_64"
 
 cpus: 4
@@ -436,11 +428,6 @@ portForwards:
     hostPort: 6840
   - guestPort: 6841
     hostPort: 6841
-LIMAEOF
-
-    # Add provision script only for Alpine cloud images (custom image is pre-provisioned).
-    if [ "$use_custom" = false ]; then
-      cat >> "$lima_config" <<'PROVISION_EOF'
 
 provision:
   - mode: system
@@ -479,8 +466,7 @@ provision:
       fi
 
       echo "LOKA ready with KVM + Firecracker."
-PROVISION_EOF
-    fi
+LIMAEOF
 
     limactl create --name="$LIMA_INSTANCE" --tty=false "$lima_config"
     rm "$lima_config"
