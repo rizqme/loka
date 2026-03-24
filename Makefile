@@ -79,6 +79,10 @@ build-rootfs: build-linux
 setup-lima:
 	bash scripts/setup-lima.sh
 
+# Build minimal Lima VM image (~50MB) — requires Docker
+lima-image:
+	bash scripts/build-lima-image.sh
+
 # Run E2E test suite
 e2e-test: build
 	bash scripts/e2e-test.sh
