@@ -399,9 +399,9 @@ vmType: vz
 nestedVirtualization: true
 
 images:
-  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-arm64.img"
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-aarch64-uefi-cloudinit-r0.qcow2"
     arch: "aarch64"
-  - location: "https://cloud-images.ubuntu.com/releases/24.04/release/ubuntu-24.04-server-cloudimg-amd64.img"
+  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-x86_64-uefi-cloudinit-r0.qcow2"
     arch: "x86_64"
 
 cpus: 4
@@ -421,27 +421,24 @@ portForwards:
 provision:
   - mode: system
     script: |
-      #!/bin/bash
+      #!/bin/sh
       set -eux
 
       # Install dependencies.
-      apt-get update -q
-      apt-get install -y -q qemu-kvm curl iptables iproute2 e2fsprogs
+      apk add --no-cache curl iptables iproute2 e2fsprogs docker
+
+      # Enable and start Docker.
+      rc-update add docker default 2>/dev/null || true
+      service docker start 2>/dev/null || true
 
       # Enable KVM.
       [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
 
-      # Install Docker.
-      if ! command -v docker &>/dev/null; then
-        curl -fsSL https://get.docker.com | sh
-        usermod -aG docker "$(ls /home/ | head -1)" 2>/dev/null || true
-      fi
-
       # Install LOKA inside the VM.
-      curl -fsSL https://vyprai.github.io/loka/install.sh | bash
+      curl -fsSL https://vyprai.github.io/loka/install.sh | sh
 
       # Create a default rootfs from Alpine for quick start.
-      if command -v docker &>/dev/null && [ ! -f /tmp/loka-data/artifacts/rootfs/rootfs.ext4 ]; then
+      if command -v docker && [ ! -f /tmp/loka-data/artifacts/rootfs/rootfs.ext4 ]; then
         echo "Creating default rootfs..."
         mkdir -p /tmp/loka-data/artifacts/rootfs
         docker pull alpine:latest >/dev/null 2>&1
