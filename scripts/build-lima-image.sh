@@ -72,6 +72,28 @@ echo "  $(du -h "$OUT_DIR/vmlinux" | awk '{print $1}')"
 
 # ── Step 3c: Patch overlay to include LOKA ───────────────
 
+echo "==> Building Firecracker rootfs"
+if [ ! -f "$OUT_DIR/rootfs.ext4" ]; then
+  docker run --rm --privileged \
+    --platform "linux/$GOARCH" \
+    -v "$(cd "$OUT_DIR" && pwd):/work" \
+    alpine:3.21 sh -c "
+      apk add --no-cache e2fsprogs curl >/dev/null 2>&1
+      ARCH=$ARCH
+      curl -fsSL https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/\${ARCH}/alpine-minirootfs-3.21.3-\${ARCH}.tar.gz -o /tmp/rootfs.tar.gz
+      dd if=/dev/zero of=/work/rootfs.ext4 bs=1M count=128 2>/dev/null
+      mkfs.ext4 -F /work/rootfs.ext4 >/dev/null 2>&1
+      mkdir -p /tmp/mnt
+      mount -o loop /work/rootfs.ext4 /tmp/mnt
+      tar xzf /tmp/rootfs.tar.gz -C /tmp/mnt 2>/dev/null
+      mkdir -p /tmp/mnt/usr/local/bin
+      cp /work/loka-supervisor /tmp/mnt/usr/local/bin/loka-supervisor
+      chmod +x /tmp/mnt/usr/local/bin/loka-supervisor
+      umount /tmp/mnt
+    "
+fi
+echo "  $(du -h "$OUT_DIR/rootfs.ext4" | awk '{print $1}')"
+
 echo "==> Patching overlay"
 
 # Insert LOKA additions BEFORE the final tar command in genapkovl-lima.sh.
@@ -84,11 +106,12 @@ if [ -d /loka-bins ]; then
     [ -f "/loka-bins/$bin" ] && cp "/loka-bins/$bin" "$tmp/usr/local/bin/$bin" && chmod +x "$tmp/usr/local/bin/$bin"
   done
 
-  # Kernel — store in /usr/share/loka/ (persisted), provision script links it.
+  # Kernel + rootfs — store in /usr/share/loka/ (persisted), provision links them.
   mkdir -p "$tmp"/usr/share/loka
   [ -f "/loka-bins/vmlinux" ] && cp "/loka-bins/vmlinux" "$tmp/usr/share/loka/vmlinux"
+  [ -f "/loka-bins/rootfs.ext4" ] && cp "/loka-bins/rootfs.ext4" "$tmp/usr/share/loka/rootfs.ext4"
 
-  # Data dirs (created but kernel/rootfs linked at boot by provision).
+  # Data dirs.
   mkdir -p "$tmp"/var/loka/artifacts "$tmp"/var/loka/tls
 fi
 LPATCH
@@ -114,10 +137,11 @@ cp "$OUT_DIR/loka-worker" "$BUILD_DIR/loka-worker"
 cp "$OUT_DIR/loka-supervisor" "$BUILD_DIR/loka-supervisor"
 cp "$OUT_DIR/firecracker" "$BUILD_DIR/firecracker"
 cp "$OUT_DIR/vmlinux" "$BUILD_DIR/vmlinux"
+cp "$OUT_DIR/rootfs.ext4" "$BUILD_DIR/rootfs.ext4"
 
 sed -i.bak '/^ENTRYPOINT/i\
-COPY lokad loka-worker loka-supervisor firecracker vmlinux /loka-bins/\
-RUN chmod +x /loka-bins/*' Dockerfile
+COPY lokad loka-worker loka-supervisor firecracker vmlinux rootfs.ext4 /loka-bins/\
+RUN chmod +x /loka-bins/lokad /loka-bins/loka-worker /loka-bins/loka-supervisor /loka-bins/firecracker' Dockerfile
 
 echo "  Done"
 
