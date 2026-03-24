@@ -395,16 +395,76 @@ install_macos() {
     info "Creating Lima VM '${LIMA_INSTANCE}' (this takes a few minutes)..."
     echo ""
 
+    # Use custom LOKA image from GitHub releases if available,
+    # otherwise fall back to stock Alpine cloud image + provision script.
+    local img_base="https://github.com/vyprai/loka/releases/latest/download"
+    local use_custom=false
+
+    if curl -fsSL -o /dev/null -w '%{http_code}' "${img_base}/loka-lima-arm64.iso" 2>/dev/null | grep -q "^200\|^302"; then
+      use_custom=true
+      info "Using pre-built LOKA image (~108MB, binaries included)"
+    else
+      info "Using Alpine cloud image (will provision on first boot)"
+    fi
+
     local lima_config
     lima_config=$(mktemp)
 
-    cat > "$lima_config" <<'LIMAEOF'
+    if [ "$use_custom" = true ]; then
+      # Custom image: Docker, LOKA binaries, KVM pre-installed. No provision needed.
+      cat > "$lima_config" <<LIMAEOF
+# LOKA Lima VM — pre-built image with Docker + LOKA
+
+vmType: vz
+nestedVirtualization: true
+
+containerd:
+  system: false
+  user: false
+
+images:
+  - location: "${img_base}/loka-lima-arm64.iso"
+    arch: "aarch64"
+  - location: "${img_base}/loka-lima-amd64.iso"
+    arch: "x86_64"
+
+cpus: 4
+memory: "8GiB"
+disk: "50GiB"
+
+mounts:
+  - location: "~"
+    writable: true
+
+portForwards:
+  - guestPort: 6840
+    hostPort: 6840
+  - guestPort: 6841
+    hostPort: 6841
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/sh
+      # LOKA binaries are pre-installed in the ISO.
+      # Just enable KVM and install Docker on first boot.
+      #!/bin/sh
+      set -eux
+      [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
+      if ! command -v docker >/dev/null 2>&1; then
+        apk add --no-cache docker >/dev/null 2>&1
+        rc-update add docker default 2>/dev/null || true
+      fi
+      service docker start 2>/dev/null || true
+LIMAEOF
+    else
+      # Stock Alpine: needs full provision.
+      cat > "$lima_config" <<'LIMAEOF'
 # LOKA Lima VM — Alpine Linux with KVM for Firecracker
 
 vmType: vz
 nestedVirtualization: true
 
-# Alpine uses OpenRC, not systemd — disable containerd (we use Docker directly).
 containerd:
   system: false
   user: false
@@ -434,39 +494,13 @@ provision:
     script: |
       #!/bin/sh
       set -eux
-
-      # Install dependencies.
       apk add --no-cache curl iptables iproute2 e2fsprogs docker
-
-      # Enable and start Docker.
       rc-update add docker default 2>/dev/null || true
       service docker start 2>/dev/null || true
-
-      # Enable KVM.
       [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
-
-      # Install LOKA inside the VM.
       curl -fsSL https://vyprai.github.io/loka/install.sh | sh
-
-      # Create a default rootfs from Alpine for quick start.
-      if command -v docker && [ ! -f /tmp/loka-data/artifacts/rootfs/rootfs.ext4 ]; then
-        echo "Creating default rootfs..."
-        mkdir -p /tmp/loka-data/artifacts/rootfs
-        docker pull alpine:latest >/dev/null 2>&1
-        CID=$(docker create alpine:latest)
-        docker export $CID > /tmp/rootfs.tar
-        docker rm $CID >/dev/null
-        dd if=/dev/zero of=/tmp/loka-data/artifacts/rootfs/rootfs.ext4 bs=1M count=512 2>/dev/null
-        mkfs.ext4 -F /tmp/loka-data/artifacts/rootfs/rootfs.ext4 >/dev/null 2>&1
-        mkdir -p /mnt/rootfs
-        mount /tmp/loka-data/artifacts/rootfs/rootfs.ext4 /mnt/rootfs
-        tar xf /tmp/rootfs.tar -C /mnt/rootfs 2>/dev/null
-        umount /mnt/rootfs
-        rm /tmp/rootfs.tar
-      fi
-
-      echo "LOKA ready with KVM + Firecracker."
 LIMAEOF
+    fi
 
     limactl create --name="$LIMA_INSTANCE" --tty=false "$lima_config"
     rm "$lima_config"

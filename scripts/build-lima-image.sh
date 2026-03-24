@@ -1,150 +1,147 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────
-#  Build a custom Lima VM image for LOKA
+#  Build a minimal Lima VM image for LOKA (~90MB ISO)
 #
-#  Takes the Alpine cloud image, injects LOKA binaries and
-#  pre-configures everything so no provision step is needed.
-#  Result: a bootable qcow2 ready for Lima.
+#  Uses alpine-lima "std" edition (lima-init, no cloud-init).
+#  LOKA binaries are COPY'd into the mkimage Docker image so
+#  genapkovl-lima.sh can include them in the overlay at build time.
 #
-#  Usage:
-#    bash scripts/build-lima-image.sh
-#    ARCH=amd64 bash scripts/build-lima-image.sh
-#
-#  Requires: Docker
+#  Requires: Docker, Go, git
 # ──────────────────────────────────────────────────────────
 set -euo pipefail
 
 ARCH="${ARCH:-$(uname -m)}"
 case "$ARCH" in
-  aarch64|arm64) ARCH="aarch64"; GOARCH="arm64"; PLATFORM="linux/arm64" ;;
-  x86_64|amd64)  ARCH="x86_64";  GOARCH="amd64"; PLATFORM="linux/amd64" ;;
+  aarch64|arm64) ARCH="aarch64"; GOARCH="arm64" ;;
+  x86_64|amd64)  ARCH="x86_64";  GOARCH="amd64" ;;
   *) echo "Unsupported arch: $ARCH"; exit 1 ;;
 esac
 
-OUT_DIR="${OUT_DIR:-./build}"
-IMAGE_NAME="loka-lima-${GOARCH}.qcow2"
-ALPINE_IMG="nocloud_alpine-3.23.3-${ARCH}-uefi-cloudinit-r0.qcow2"
-ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/${ALPINE_IMG}"
+PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+OUT_DIR="${OUT_DIR:-$PROJECT_DIR/build}"
+IMAGE_NAME="loka-lima-${GOARCH}.iso"
+ALPINE_VERSION="${ALPINE_VERSION:-3.21.3}"
+BUILD_DIR="/tmp/alpine-lima-loka"
 
 echo ""
-echo "  Building LOKA Lima image"
-echo "  Arch: ${ARCH} (${GOARCH})"
-echo "  Base: ${ALPINE_IMG}"
-echo "  Output: ${OUT_DIR}/${IMAGE_NAME}"
+echo "  Building LOKA Lima image (~90MB)"
+echo "  Arch: ${ARCH} | Alpine: ${ALPINE_VERSION}"
 echo ""
 
 mkdir -p "$OUT_DIR"
 
-# ── Build LOKA binaries for Linux ────────────────────────
+# ── Step 1: Build LOKA binaries ──────────────────────────
 
 echo "==> Building LOKA binaries (linux/${GOARCH})"
+cd "$PROJECT_DIR"
 GOOS=linux GOARCH=$GOARCH go build -trimpath -ldflags="-s -w" -o "$OUT_DIR/lokad" ./cmd/lokad 2>/dev/null
 GOOS=linux GOARCH=$GOARCH go build -trimpath -ldflags="-s -w" -o "$OUT_DIR/loka-worker" ./cmd/loka-worker 2>/dev/null
 GOOS=linux GOARCH=$GOARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o "$OUT_DIR/loka-supervisor" ./cmd/loka-supervisor 2>/dev/null
 echo "  Done"
 
-# ── Customize Alpine cloud image in Docker ───────────────
+# ── Step 2: Clone alpine-lima ────────────────────────────
 
-echo "==> Customizing Alpine cloud image in Docker"
+echo "==> Preparing alpine-lima"
+rm -rf "$BUILD_DIR"
+git clone --depth 1 https://github.com/lima-vm/alpine-lima.git "$BUILD_DIR" 2>&1 | tail -1
+cd "$BUILD_DIR"
+git submodule update --init 2>/dev/null || true
 
-cat > "$OUT_DIR/customize.sh" << 'SCRIPT'
-#!/bin/sh
-set -eux
+# ── Step 3: Patch overlay to include LOKA ────────────────
 
-ARCH="$1"
-ALPINE_URL="$2"
+echo "==> Patching overlay"
 
-apk add --no-cache qemu-img e2fsprogs e2fsprogs-extra curl parted sgdisk >/dev/null 2>&1
-
-cd /work
-
-# Download Alpine cloud image.
-echo "Downloading Alpine cloud image..."
-curl -fsSL "$ALPINE_URL" -o base.qcow2
-
-# Convert to raw and expand for extra space.
-qemu-img convert -f qcow2 -O raw base.qcow2 disk.raw
-rm base.qcow2
-qemu-img resize -f raw disk.raw 2G
-
-# Fix GPT after resize and expand root partition to fill disk.
-# Alpine cloud images: partition 1 = EFI, partition 2 = root.
-sgdisk -e disk.raw
-parted -s disk.raw resizepart 2 100%
-
-# Find the root partition offset and resize filesystem.
-ROOT_START=$(parted -s disk.raw unit B print | awk '/^ 2/{print $2}' | tr -d 'B')
-ROOT_SIZE=$(parted -s disk.raw unit B print | awk '/^ 2/{print $4}' | tr -d 'B')
-if [ -z "$ROOT_START" ]; then
-  echo "ERROR: cannot find root partition"; exit 1
+# Insert LOKA additions BEFORE the final tar command in genapkovl-lima.sh.
+cat > /tmp/loka-patch.sh << 'LPATCH'
+# ── LOKA ─────────────────────────────────────────────────
+if [ -d /loka-bins ]; then
+  mkdir -p "$tmp"/usr/local/bin
+  for bin in lokad loka-worker loka-supervisor; do
+    [ -f "/loka-bins/$bin" ] && cp "/loka-bins/$bin" "$tmp/usr/local/bin/$bin" && chmod +x "$tmp/usr/local/bin/$bin"
+  done
+  mkdir -p "$tmp"/var/loka/kernel "$tmp"/var/loka/artifacts "$tmp"/var/loka/tls
 fi
-echo "Root partition at offset $ROOT_START, size $ROOT_SIZE"
+LPATCH
 
-# Resize the filesystem to fill the expanded partition.
-# Use a temp loop device for e2fsck/resize2fs.
-LOOP=$(losetup -f)
-losetup -o "$ROOT_START" "$LOOP" disk.raw
-e2fsck -fy "$LOOP" || true
-resize2fs "$LOOP"
-losetup -d "$LOOP"
+python3 -c "
+import sys
+patch = open('/tmp/loka-patch.sh').read()
+lines = open('genapkovl-lima.sh').readlines()
+out = []
+for l in lines:
+    if l.startswith('tar -c -C \"\$tmp\"'):
+        out.append(patch)
+    out.append(l)
+open('genapkovl-lima.sh','w').writelines(out)
+"
+chmod +x genapkovl-lima.sh
 
-# Mount the root partition.
-mkdir -p /mnt/rootfs
-mount -o loop,offset=$ROOT_START disk.raw /mnt/rootfs
+# ── Step 4: Patch Dockerfile to COPY binaries ────────────
 
-# ── Install LOKA binaries ────────────────────────────────
-cp /work/lokad /mnt/rootfs/usr/local/bin/lokad
-cp /work/loka-worker /mnt/rootfs/usr/local/bin/loka-worker
-cp /work/loka-supervisor /mnt/rootfs/usr/local/bin/loka-supervisor
-chmod +x /mnt/rootfs/usr/local/bin/lokad /mnt/rootfs/usr/local/bin/loka-worker /mnt/rootfs/usr/local/bin/loka-supervisor
+# Add LOKA binaries into the Docker build image so genapkovl can access them.
+cp "$OUT_DIR/lokad" "$BUILD_DIR/lokad"
+cp "$OUT_DIR/loka-worker" "$BUILD_DIR/loka-worker"
+cp "$OUT_DIR/loka-supervisor" "$BUILD_DIR/loka-supervisor"
 
-# ── Install packages via chroot ──────────────────────────
-cp /etc/resolv.conf /mnt/rootfs/etc/resolv.conf
-mount -t proc proc /mnt/rootfs/proc
-mount -t sysfs sys /mnt/rootfs/sys
-mount --bind /dev /mnt/rootfs/dev
+sed -i.bak '/^ENTRYPOINT/i\
+COPY lokad loka-worker loka-supervisor /loka-bins/\
+RUN chmod +x /loka-bins/*' Dockerfile
 
-chroot /mnt/rootfs /bin/sh -c '
-  apk update >/dev/null 2>&1
-  apk add --no-cache docker iptables iproute2 e2fsprogs curl >/dev/null 2>&1
+echo "  Done"
 
-  # Enable Docker and KVM.
-  rc-update add docker default 2>/dev/null || true
-  echo "kvm" >> /etc/modules
+# ── Step 5: Build mkimage Docker image ───────────────────
 
-  # Create LOKA data directories.
-  mkdir -p /var/loka/kernel /var/loka/artifacts /var/loka/worker /var/loka/raft /var/loka/tls
-  mkdir -p /tmp/loka-data/kernel /tmp/loka-data/rootfs /tmp/loka-data/objstore /tmp/loka-data/worker-data
+echo "==> Building mkimage Docker image (with LOKA binaries)"
+make mkimage ALPINE_VERSION="$ALPINE_VERSION" 2>&1 | tail -3
 
-  # Clean caches.
-  rm -rf /var/cache/apk/*
-'
+# ── Step 6: Build ISO ────────────────────────────────────
 
-umount /mnt/rootfs/dev /mnt/rootfs/proc /mnt/rootfs/sys
-umount /mnt/rootfs
+echo "==> Building ISO"
 
-# ── Recompress to qcow2 ─────────────────────────────────
-qemu-img convert -f raw -O qcow2 -c disk.raw /work/output.qcow2
-rm disk.raw
+# Set up variables that build.sh needs.
+source "edition/std"
+REPO_VERSION="v${ALPINE_VERSION%.*}"
+BUILD_ID="loka-$(date +%Y%m%d)"
+ARCH_ALIAS="$GOARCH"
 
-echo "==> Image size: $(du -h /work/output.qcow2 | awk '{print $1}')"
-SCRIPT
+# Need QEMU COPYING file.
+QEMU_VERSION=$(grep "^QEMU_VERSION" Makefile | head -1 | cut -d= -f2 | tr -d ' ')
+[ -z "$QEMU_VERSION" ] && QEMU_VERSION="v9.2.2-52"
+QEMU_COPYING="qemu-${QEMU_VERSION}-copying"
+[ ! -f "$QEMU_COPYING" ] && curl -fsSL "https://raw.githubusercontent.com/qemu/qemu/master/COPYING" -o "$QEMU_COPYING" 2>/dev/null || touch "$QEMU_COPYING"
 
-chmod +x "$OUT_DIR/customize.sh"
+mkdir -p iso
 
-docker run --rm --privileged \
-  --platform "$PLATFORM" \
-  -v "$(cd "$OUT_DIR" && pwd):/work" \
-  alpine:3.21 \
-  /work/customize.sh "$ARCH" "$ALPINE_URL"
+docker run --rm \
+  --platform "linux/${ARCH_ALIAS}" \
+  -v "${PWD}/iso:/iso" \
+  -v "${PWD}/mkimg.lima.sh:/home/build/aports/scripts/mkimg.lima.sh:ro" \
+  -v "${PWD}/genapkovl-lima.sh:/home/build/aports/scripts/genapkovl-lima.sh:ro" \
+  -v "${PWD}/lima-init.sh:/home/build/lima-init.sh:ro" \
+  -v "${PWD}/lima-init.openrc:/home/build/lima-init.openrc:ro" \
+  -v "${PWD}/lima-init-local.openrc:/home/build/lima-init-local.openrc:ro" \
+  -v "${PWD}/lima-network.awk:/home/build/lima-network.awk:ro" \
+  -v "${PWD}/${QEMU_COPYING}:/home/build/qemu-copying:ro" \
+  $(env | grep ^LIMA_ | xargs -n 1 printf -- '-e %s ' 2>/dev/null || true) \
+  -e "LIMA_REPO_VERSION=${REPO_VERSION}" \
+  -e "LIMA_BUILD_ID=${BUILD_ID}" \
+  -e "LIMA_VARIANT_ID=std" \
+  "mkimage:${ALPINE_VERSION}-${ARCH}" \
+  --tag "std-${ALPINE_VERSION}" \
+  --outdir /iso \
+  --arch "${ARCH}" \
+  --repository "http://dl-cdn.alpinelinux.org/alpine/${REPO_VERSION}/main" \
+  --repository "http://dl-cdn.alpinelinux.org/alpine/${REPO_VERSION}/community" \
+  --profile lima 2>&1 | tail -3
 
-mv "$OUT_DIR/output.qcow2" "$OUT_DIR/${IMAGE_NAME}"
-rm -f "$OUT_DIR/customize.sh" "$OUT_DIR/lokad" "$OUT_DIR/loka-worker" "$OUT_DIR/loka-supervisor"
+# ── Step 7: Output ───────────────────────────────────────
 
+ISO_FILE=$(ls -1t iso/alpine-lima-*.iso 2>/dev/null | head -1)
+[ -z "$ISO_FILE" ] && { echo "ERROR: ISO not found"; exit 1; }
+
+cp "$ISO_FILE" "$OUT_DIR/${IMAGE_NAME}"
 SIZE=$(du -h "$OUT_DIR/${IMAGE_NAME}" | awk '{print $1}')
+
 echo ""
-echo "  Image built: ${OUT_DIR}/${IMAGE_NAME} (${SIZE})"
-echo ""
-echo "  Upload to GitHub release:"
-echo "    gh release upload v\$(cat pkg/version/version.go | grep Version | grep -o 'v[0-9.]*') ${OUT_DIR}/${IMAGE_NAME}"
+echo "  ${OUT_DIR}/${IMAGE_NAME} (${SIZE})"
 echo ""
