@@ -12,6 +12,12 @@ set -uo pipefail
 
 # ── Platform detection ───────────────────────────────────
 
+# Skip in CI — E2E tests need KVM + Firecracker
+if [ "${CI:-}" = "true" ] || [ "${GITHUB_ACTIONS:-}" = "true" ]; then
+  echo "E2E tests skipped in CI (requires KVM + Firecracker)"
+  exit 0
+fi
+
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 IS_MACOS=false
