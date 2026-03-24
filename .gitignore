@@ -30,3 +30,4 @@ api/proto/gen/
 
 # Build
 dist/
+loka.db*
