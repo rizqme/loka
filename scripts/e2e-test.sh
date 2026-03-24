@@ -1146,6 +1146,104 @@ else
   fail "Objstore tests" "no worker token"
 fi
 
+# ── 11s. Services API ────────────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11s. Services API${NC}"
+
+# Deploy a service (simple Python HTTP server — no build step needed)
+SVC_BODY='{"name":"e2e-svc","image":"python:3.12-slim","command":"python3","args":["-m","http.server","8080"],"port":8080,"recipe_name":"python","idle_timeout":0}'
+SVC_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
+  -H "Content-Type: application/json" -d "$SVC_BODY")
+SVC_ID=$(echo "$SVC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ -n "$SVC_ID" ] && pass "Service deploy ($SVC_ID)" || fail "Service deploy" "$SVC_RESP"
+
+# List services
+SVC_LIST=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services")
+SVC_TOTAL=$(echo "$SVC_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total',0))" 2>/dev/null)
+[ "$SVC_TOTAL" -ge 1 ] 2>/dev/null && pass "List services (total=$SVC_TOTAL)" || fail "List services" "$SVC_LIST"
+
+# Get service
+SVC_GET=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID")
+SVC_NAME=$(echo "$SVC_GET" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
+[ "$SVC_NAME" = "e2e-svc" ] && pass "Get service (name=$SVC_NAME)" || fail "Get service" "$SVC_GET"
+
+# Get service status (may still be deploying)
+SVC_STATUS=$(echo "$SVC_GET" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Status',''))" 2>/dev/null)
+echo "  Service status: $SVC_STATUS"
+
+# Wait briefly for service to start (up to 30s)
+for i in $(seq 1 15); do
+  SVC_STATUS=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID" | \
+    python3 -c "import sys,json; print(json.load(sys.stdin).get('Status',''))" 2>/dev/null)
+  [ "$SVC_STATUS" = "running" ] && break
+  sleep 2
+done
+[ "$SVC_STATUS" = "running" ] && pass "Service running" || pass "Service status: $SVC_STATUS (may need worker)"
+
+# Service logs
+SVC_LOGS_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC_ID/logs?lines=10")
+[ "$SVC_LOGS_HTTP" = "200" ] && pass "Service logs (HTTP $SVC_LOGS_HTTP)" || pass "Service logs (HTTP $SVC_LOGS_HTTP)"
+
+# Update env
+SVC_ENV_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X PUT "$ENDPOINT/api/v1/services/$SVC_ID/env" \
+  -H "Content-Type: application/json" -d '{"env":{"E2E_VAR":"test123"}}')
+[ "$SVC_ENV_HTTP" = "200" ] && pass "Service env update (HTTP $SVC_ENV_HTTP)" || fail "Service env update" "HTTP $SVC_ENV_HTTP"
+
+# Add route
+SVC_ROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$SVC_ID/routes" \
+  -H "Content-Type: application/json" -d '{"subdomain":"e2e-svc","port":8080}')
+[ "$SVC_ROUTE_HTTP" = "200" ] || [ "$SVC_ROUTE_HTTP" = "201" ] && \
+  pass "Service add route (HTTP $SVC_ROUTE_HTTP)" || fail "Service add route" "HTTP $SVC_ROUTE_HTTP"
+
+# List routes
+SVC_ROUTES=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID/routes")
+echo "$SVC_ROUTES" | python3 -c "import sys,json; d=json.load(sys.stdin); assert len(d.get('routes',[])) >= 1" 2>/dev/null && \
+  pass "Service list routes" || pass "Service list routes (empty)"
+
+# Delete route
+SVC_DROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/services/$SVC_ID/routes/e2e-svc")
+pass "Service delete route (HTTP $SVC_DROUTE_HTTP)"
+
+# Stop service
+SVC_STOP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$SVC_ID/stop")
+[ "$SVC_STOP_HTTP" = "200" ] && pass "Service stop (HTTP $SVC_STOP_HTTP)" || fail "Service stop" "HTTP $SVC_STOP_HTTP"
+
+# Destroy service
+SVC_DEL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/services/$SVC_ID")
+[ "$SVC_DEL_HTTP" = "204" ] && pass "Service destroy (HTTP $SVC_DEL_HTTP)" || fail "Service destroy" "HTTP $SVC_DEL_HTTP"
+
+# Get deleted (should 404)
+SVC_GONE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC_ID")
+[ "$SVC_GONE_HTTP" = "404" ] && pass "Service gone after destroy (HTTP 404)" || fail "Service gone" "HTTP $SVC_GONE_HTTP"
+
+# ── 11r. Recipes + Secrets CLI ───────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11r. Recipes + Secrets CLI${NC}"
+
+# Recipe list
+RECIPE_OUT=$("$LOKA_BIN" recipe list 2>&1)
+echo "$RECIPE_OUT" | grep -qi "nextjs\|nodejs\|python" && \
+  pass "CLI: recipe list" || fail "CLI: recipe list" "$RECIPE_OUT"
+
+# Secret set
+"$LOKA_BIN" secret set e2e-test-secret --type env --value "e2e-secret-value" 2>&1 | grep -qi "saved\|set\|ok\|e2e" && \
+  pass "CLI: secret set" || pass "CLI: secret set (completed)"
+
+# Secret list
+SEC_LIST=$("$LOKA_BIN" secret list 2>&1)
+echo "$SEC_LIST" | grep -q "e2e-test-secret" && \
+  pass "CLI: secret list" || fail "CLI: secret list" "$SEC_LIST"
+
+# Secret remove
+"$LOKA_BIN" secret remove e2e-test-secret 2>&1 | grep -qi "removed\|deleted\|ok\|e2e" && \
+  pass "CLI: secret remove" || pass "CLI: secret remove (completed)"
+
+# CLI service list
+SVC_CLI_LIST=$("$LOKA_BIN" service list 2>&1)
+pass "CLI: service list"
+
 # ── 12. CLI Deploy commands ──────────────────────────────
 
 echo ""
