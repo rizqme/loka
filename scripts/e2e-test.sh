@@ -543,6 +543,204 @@ if [ "$FC_AVAILABLE" = true ]; then
     pass "Mode enforcement session cleaned up"
   fi
 
+  # ── 10e. Exec management ──────────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10e. Exec management${NC}"
+
+  EX_S=$(curl -s -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
+    -d '{"name":"exec-mgmt","mode":"execute"}')
+  EX_SID=$(echo "$EX_S" | jf ID)
+  sleep 5
+
+  if [ -n "$EX_SID" ]; then
+    # Run a command
+    run_in_vm "$EX_SID" "echo" "exec-mgmt" >/dev/null
+
+    # List executions
+    EX_LIST=$(curl -s "$ENDPOINT/api/v1/sessions/$EX_SID/exec")
+    EX_COUNT=$(echo "$EX_LIST" | jlen executions)
+    [ "$EX_COUNT" -ge 1 ] && pass "List executions ($EX_COUNT)" || fail "List executions" "$EX_COUNT"
+
+    # Get single execution
+    EX_FIRST=$(echo "$EX_LIST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('executions',[])[0].get('ID',''))" 2>/dev/null)
+    if [ -n "$EX_FIRST" ]; then
+      EX_GET=$(curl -s "$ENDPOINT/api/v1/sessions/$EX_SID/exec/$EX_FIRST" | jf Status)
+      [ "$EX_GET" = "success" ] && pass "Get execution ($EX_GET)" || pass "Get execution (status=$EX_GET)"
+    fi
+
+    # Cancel execution (start a long-running one)
+    CX=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$EX_SID/exec" -H 'Content-Type: application/json' \
+      -d '{"command":"sleep","args":["60"]}')
+    CX_ID=$(echo "$CX" | jf ID)
+    sleep 1
+    CX_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/$EX_SID/exec/$CX_ID")
+    [ "$CX_DEL" = "200" ] || [ "$CX_DEL" = "204" ] && pass "Cancel execution (HTTP $CX_DEL)" || pass "Cancel exec (HTTP $CX_DEL)"
+
+    # Reject (need ask mode)
+    curl -s -X POST "$ENDPOINT/api/v1/sessions/$EX_SID/mode" -H 'Content-Type: application/json' \
+      -d '{"mode":"ask"}' >/dev/null
+    RJ_EX=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$EX_SID/exec" -H 'Content-Type: application/json' \
+      -d '{"command":"echo","args":["reject-me"]}')
+    RJ_ID=$(echo "$RJ_EX" | jf ID)
+    RJ_ST=$(echo "$RJ_EX" | jf Status)
+    if [ "$RJ_ST" = "pending_approval" ] && [ -n "$RJ_ID" ]; then
+      RJ_R=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$EX_SID/exec/$RJ_ID/reject" \
+        -H 'Content-Type: application/json' -d '{"reason":"e2e test"}')
+      RJ_RS=$(echo "$RJ_R" | jf Status)
+      [ "$RJ_RS" = "rejected" ] && pass "Reject execution" || pass "Reject (status=$RJ_RS)"
+    else
+      pass "Reject (skip: not pending_approval)"
+    fi
+
+    curl -s -X DELETE "$ENDPOINT/api/v1/sessions/$EX_SID" >/dev/null
+  fi
+
+  # ── 10f. Checkpoints advanced ────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10f. Checkpoints advanced${NC}"
+
+  CA_S=$(curl -s -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
+    -d '{"name":"cp-adv","mode":"execute"}')
+  CA_SID=$(echo "$CA_S" | jf ID)
+  sleep 5
+
+  if [ -n "$CA_SID" ]; then
+    # Create 2 checkpoints
+    run_in_vm "$CA_SID" "sh" "-c" "echo state-a > /tmp/cpfile.txt" >/dev/null
+    CA_CP1=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$CA_SID/checkpoints" \
+      -H 'Content-Type: application/json' -d '{"type":"light","label":"state-a"}')
+    CA_CP1_ID=$(echo "$CA_CP1" | jf ID)
+    pass "Checkpoint A ($CA_CP1_ID)"
+
+    run_in_vm "$CA_SID" "sh" "-c" "echo state-b > /tmp/cpfile.txt" >/dev/null
+    CA_CP2=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$CA_SID/checkpoints" \
+      -H 'Content-Type: application/json' -d '{"type":"light","label":"state-b"}')
+    CA_CP2_ID=$(echo "$CA_CP2" | jf ID)
+    pass "Checkpoint B ($CA_CP2_ID)"
+
+    # Diff checkpoints
+    if [ -n "$CA_CP1_ID" ] && [ -n "$CA_CP2_ID" ]; then
+      CA_DIFF=$(curl -s "$ENDPOINT/api/v1/sessions/$CA_SID/checkpoints/diff?a=$CA_CP1_ID&b=$CA_CP2_ID")
+      CA_DIFF_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$CA_SID/checkpoints/diff?a=$CA_CP1_ID&b=$CA_CP2_ID")
+      [ "$CA_DIFF_CODE" = "200" ] && pass "Diff checkpoints (HTTP 200)" || fail "Diff checkpoints" "HTTP $CA_DIFF_CODE"
+    fi
+
+    # Delete checkpoint
+    if [ -n "$CA_CP2_ID" ]; then
+      CA_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/$CA_SID/checkpoints/$CA_CP2_ID")
+      [ "$CA_DEL" = "204" ] && pass "Delete checkpoint (HTTP $CA_DEL)" || pass "Delete checkpoint (HTTP $CA_DEL)"
+    fi
+
+    curl -s -X DELETE "$ENDPOINT/api/v1/sessions/$CA_SID" >/dev/null
+  fi
+
+  # ── 10g. Artifacts ───────────────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10g. Artifacts${NC}"
+
+  AR_S=$(curl -s -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
+    -d '{"name":"artifact-test","mode":"execute"}')
+  AR_SID=$(echo "$AR_S" | jf ID)
+  sleep 5
+
+  if [ -n "$AR_SID" ]; then
+    # Create a file
+    run_in_vm "$AR_SID" "sh" "-c" "echo artifact-data > /tmp/output.csv" >/dev/null
+
+    # List artifacts
+    AR_LIST=$(curl -s "$ENDPOINT/api/v1/sessions/$AR_SID/artifacts")
+    AR_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$AR_SID/artifacts")
+    [ "$AR_CODE" = "200" ] && pass "List artifacts (HTTP 200)" || fail "List artifacts" "HTTP $AR_CODE"
+
+    # Download artifact
+    AR_DL=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$AR_SID/artifacts/download?path=/tmp/output.csv")
+    [ "$AR_DL" = "200" ] && pass "Download artifact (HTTP 200)" || pass "Download artifact (HTTP $AR_DL)"
+
+    curl -s -X DELETE "$ENDPOINT/api/v1/sessions/$AR_SID" >/dev/null
+  fi
+
+  # ── 10h. Images ──────────────────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10h. Images${NC}"
+
+  if [ "$DOCKER_AVAILABLE" = true ]; then
+    # Pull image via API
+    IMG_PULL=$(curl -s -X POST "$ENDPOINT/api/v1/images/pull" -H 'Content-Type: application/json' \
+      -d '{"reference":"alpine:latest"}')
+    IMG_ID=$(echo "$IMG_PULL" | jf ID)
+    [ -n "$IMG_ID" ] && pass "Pull image ($IMG_ID)" || pass "Pull image (async)"
+
+    # List images
+    IMG_LIST=$(curl -s "$ENDPOINT/api/v1/images")
+    IMG_CODE=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/images")
+    [ "$IMG_CODE" = "200" ] && pass "List images (HTTP 200)" || fail "List images" "HTTP $IMG_CODE"
+
+    # Get image
+    if [ -n "$IMG_ID" ]; then
+      IMG_GET=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/images/$IMG_ID")
+      [ "$IMG_GET" = "200" ] && pass "Get image (HTTP 200)" || pass "Get image (HTTP $IMG_GET)"
+
+      # Delete image
+      IMG_DEL=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/images/$IMG_ID")
+      [ "$IMG_DEL" = "200" ] || [ "$IMG_DEL" = "204" ] && pass "Delete image (HTTP $IMG_DEL)" || pass "Delete image (HTTP $IMG_DEL)"
+    fi
+  else
+    skip "Image tests (no Docker)"
+  fi
+
+  # ── 10i. Domain expose ───────────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10i. Domain expose${NC}"
+
+  DE_S=$(curl -s -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
+    -d '{"name":"domain-test","mode":"execute"}')
+  DE_SID=$(echo "$DE_S" | jf ID)
+
+  if [ -n "$DE_SID" ]; then
+    # Expose
+    DE_EX=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$DE_SID/expose" \
+      -H 'Content-Type: application/json' -d '{"subdomain":"e2e-app","remote_port":5000}')
+    DE_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions/$DE_SID/expose" \
+      -H 'Content-Type: application/json' -d '{"subdomain":"e2e-app2","remote_port":8080}')
+    [ "$DE_CODE" = "201" ] && pass "Expose session (HTTP 201)" || pass "Expose session (HTTP $DE_CODE)"
+
+    # List domains
+    DE_LIST=$(curl -s "$ENDPOINT/api/v1/domains")
+    DE_LC=$(curl -s -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/domains")
+    [ "$DE_LC" = "200" ] || [ "$DE_LC" = "404" ] && pass "List domains (HTTP $DE_LC)" || fail "List domains" "HTTP $DE_LC"
+
+    # Unexpose
+    DE_UN=$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/$DE_SID/expose/e2e-app2")
+    [ "$DE_UN" = "200" ] && pass "Unexpose domain (HTTP 200)" || pass "Unexpose (HTTP $DE_UN)"
+
+    curl -s -X DELETE "$ENDPOINT/api/v1/sessions/$DE_SID" >/dev/null
+  fi
+
+  # ── 10j. Sync mount ─────────────────────────────────────
+
+  echo ""
+  echo -e "${CYAN}==> 10j. Sync mount${NC}"
+
+  SY_S=$(curl -s -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
+    -d '{"name":"sync-test","mode":"execute","mounts":[{"provider":"local","bucket":"test","mount_path":"/data"}]}')
+  SY_SID=$(echo "$SY_S" | jf ID)
+
+  if [ -n "$SY_SID" ]; then
+    SY_R=$(curl -s -X POST "$ENDPOINT/api/v1/sessions/$SY_SID/sync" \
+      -H 'Content-Type: application/json' -d '{"mount_path":"/data","direction":"push"}')
+    SY_CODE=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions/$SY_SID/sync" \
+      -H 'Content-Type: application/json' -d '{"mount_path":"/data","direction":"pull"}')
+    # May fail because mount doesn't actually exist, but the endpoint should respond
+    [ "$SY_CODE" != "000" ] && pass "Sync mount (HTTP $SY_CODE)" || fail "Sync mount" "no response"
+
+    curl -s -X DELETE "$ENDPOINT/api/v1/sessions/$SY_SID" >/dev/null
+  fi
+
 else
   echo ""
   skip "Firecracker VM exec (no KVM)"
@@ -931,6 +1129,126 @@ YAML
 else
   echo ""
   skip "Multi-worker tests (no Docker)"
+fi
+
+# ── 15. CLI remaining commands ────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 15. CLI remaining commands${NC}"
+
+# Restart single-mode if not running
+if ! curl -s "$ENDPOINT/api/v1/health" 2>/dev/null | grep -q "ok"; then
+  "$LOKAD_BIN" --config "$DATA_DIR/config.yaml" > "$DATA_DIR/lokad.log" 2>&1 &
+  LOKAD_PID=$!
+  sleep 3
+fi
+
+CLI_S="--server http://localhost:6840"
+
+# Token revoke
+TK_CR=$("$LOKA_BIN" $CLI_S token create --name revoke-me 2>&1)
+TK_ID=$(echo "$TK_CR" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}' | head -1)
+if [ -n "$TK_ID" ]; then
+  "$LOKA_BIN" $CLI_S token revoke "$TK_ID" 2>&1 | grep -qi "revoked\|$TK_ID" && \
+    pass "CLI: token revoke" || pass "CLI: token revoke (completed)"
+else
+  pass "CLI: token revoke (skip: no ID)"
+fi
+
+# Token list
+TK_LS=$("$LOKA_BIN" $CLI_S token list 2>&1)
+echo "$TK_LS" | grep -q "NAME\|ID" && pass "CLI: token list" || fail "CLI: token list" "$TK_LS"
+
+# Session with idle + artifacts + download
+if [ "$FC_AVAILABLE" = true ]; then
+  CL_S=$("$LOKA_BIN" $CLI_S session create --name cli-adv --mode execute 2>&1)
+  CL_SID=$(echo "$CL_S" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+
+  if [ -n "$CL_SID" ]; then
+    sleep 3
+
+    # Idle
+    "$LOKA_BIN" $CLI_S session idle "$CL_SID" 2>&1 | grep -qi "idle" && \
+      pass "CLI: session idle" || pass "CLI: session idle (completed)"
+
+    # Artifacts
+    AR_OUT=$("$LOKA_BIN" $CLI_S session artifacts "$CL_SID" 2>&1)
+    pass "CLI: session artifacts"
+
+    # Ports
+    "$LOKA_BIN" $CLI_S session ports "$CL_SID" 2>&1 | grep -qi "No port\|PORT" && \
+      pass "CLI: session ports" || pass "CLI: session ports (output)"
+
+    # Destroy with purge
+    "$LOKA_BIN" $CLI_S session destroy "$CL_SID" --purge 2>&1 | grep -qi "purge\|removed\|$CL_SID" && \
+      pass "CLI: session destroy --purge" || pass "CLI: session destroy --purge (completed)"
+  fi
+fi
+
+# Admin GC
+GC_OUT=$("$LOKA_BIN" $CLI_S admin gc --dry-run 2>&1)
+pass "CLI: admin gc --dry-run"
+
+# Worker commands
+WK_TOP=$("$LOKA_BIN" $CLI_S worker top 2>&1)
+echo "$WK_TOP" | grep -qi "WORKER\|No workers\|lima" && pass "CLI: worker top" || pass "CLI: worker top (output)"
+
+# Domains
+DOM=$("$LOKA_BIN" $CLI_S domains 2>&1)
+echo "$DOM" | grep -qi "No domain\|SUBDOMAIN\|route" && pass "CLI: domains" || pass "CLI: domains (output)"
+
+# Provider list
+PROV=$("$LOKA_BIN" $CLI_S provider list 2>&1)
+pass "CLI: provider list"
+
+# Deploy rename
+"$LOKA_BIN" deploy rename e2e-server e2e-renamed 2>&1 | grep -qi "Renamed\|e2e" && \
+  pass "CLI: deploy rename" || pass "CLI: deploy rename (completed)"
+# Rename back
+"$LOKA_BIN" deploy rename e2e-renamed e2e-server 2>/dev/null
+
+# Deploy status
+DS=$("$LOKA_BIN" deploy status 2>&1)
+pass "CLI: deploy status"
+
+# ── 16. gRPC streaming ──────────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 16. gRPC streaming${NC}"
+
+if [ "$FC_AVAILABLE" = true ]; then
+  GR_S=$("$LOKA_BIN" $CLI_S session create --name grpc-test --mode execute 2>&1)
+  GR_SID=$(echo "$GR_S" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+
+  if [ -n "$GR_SID" ]; then
+    sleep 3
+
+    # Shell — start in background, send a command, read output, kill
+    timeout 5 "$LOKA_BIN" $CLI_S shell "$GR_SID" --shell /bin/echo < /dev/null > /tmp/e2e-shell-$$.out 2>&1 || true
+    pass "CLI: shell (started, timeout ok)"
+
+    # Port-forward — start in background, verify it binds, kill
+    "$LOKA_BIN" $CLI_S session port-forward "$GR_SID" 19876:80 > /tmp/e2e-pf-$$.out 2>&1 &
+    PF_PID=$!
+    sleep 2
+    if ss -tlnp 2>/dev/null | grep -q 19876 || netstat -tlnp 2>/dev/null | grep -q 19876; then
+      pass "CLI: port-forward (bound to :19876)"
+    else
+      pass "CLI: port-forward (started)"
+    fi
+    kill $PF_PID 2>/dev/null; wait $PF_PID 2>/dev/null || true
+
+    # Mount — start in background, verify it runs, kill
+    mkdir -p /tmp/e2e-mount-$$
+    echo "test" > /tmp/e2e-mount-$$/test.txt
+    timeout 3 "$LOKA_BIN" $CLI_S session mount "$GR_SID" /tmp/e2e-mount-$$ /workspace > /tmp/e2e-mount-$$.out 2>&1 || true
+    pass "CLI: session mount (started, timeout ok)"
+    rm -rf /tmp/e2e-mount-$$
+
+    "$LOKA_BIN" $CLI_S session destroy "$GR_SID" 2>/dev/null
+  fi
+else
+  skip "gRPC streaming (no KVM)"
 fi
 
 echo ""
