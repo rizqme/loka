@@ -1,5 +1,5 @@
 .PHONY: all build build-linux build-all proto clean test test-unit test-integration lint fmt help \
-       fetch-firecracker build-rootfs setup-lima e2e-test
+       install uninstall fetch-firecracker build-rootfs setup-lima e2e-test
 
 # Variables
 GO := go
@@ -79,7 +79,51 @@ build-rootfs: build-linux
 setup-lima:
 	bash scripts/setup-lima.sh
 
-# Build minimal Lima VM image (~50MB) — requires Docker
+# Install LOKA locally from source (builds + installs + sets up Lima on macOS)
+INSTALL_DIR ?= /usr/local/bin
+install: build
+ifeq ($(shell uname -s),Darwin)
+	@echo "==> Installing CLI"
+	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
+	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
+	sudo install -m 755 $(LOKA_WORKER) $(INSTALL_DIR)/loka-worker
+	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
+	@echo "==> Setting up Lima VM"
+	@if ! command -v limactl >/dev/null 2>&1; then \
+		echo "  Installing Lima..."; \
+		brew install lima; \
+	fi
+	@if limactl list -q 2>/dev/null | grep -q "^loka$$"; then \
+		echo "  Removing old Lima VM..."; \
+		limactl stop loka --force 2>/dev/null || true; \
+		limactl delete loka --force 2>/dev/null || true; \
+	fi
+	@echo "  Creating Lima VM..."
+	@bash scripts/install.sh 2>&1 | grep -E "✓|Creating|Starting|ready|Done|installed|LOKA"
+	@echo ""
+	@echo "  LOKA installed. Run: loka deploy local"
+else
+	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
+	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
+	sudo install -m 755 $(LOKA_WORKER) $(INSTALL_DIR)/loka-worker
+	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
+	@echo "  LOKA installed. Run: lokad --config /etc/loka/controlplane.yaml"
+endif
+
+# Uninstall LOKA
+uninstall:
+	@echo "==> Uninstalling LOKA"
+ifeq ($(shell uname -s),Darwin)
+	-loka deploy down 2>/dev/null || true
+	-limactl stop loka --force 2>/dev/null || true
+	-limactl delete loka --force 2>/dev/null || true
+endif
+	-sudo rm -f $(INSTALL_DIR)/loka $(INSTALL_DIR)/lokad $(INSTALL_DIR)/loka-worker $(INSTALL_DIR)/loka-supervisor
+	-sudo rm -f $(INSTALL_DIR)/firecracker
+	-rm -rf $(HOME)/.loka
+	@echo "  ✓ LOKA uninstalled"
+
+# Build minimal Lima VM image — requires Docker
 lima-image:
 	bash scripts/build-lima-image.sh
 
@@ -106,12 +150,14 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build            Build all binaries for current platform"
+	@echo "  install          Build + install locally (sets up Lima on macOS)"
+	@echo "  uninstall        Remove LOKA, Lima VM, and all data"
 	@echo "  build-linux      Cross-compile all binaries for Linux amd64"
 	@echo "  build-all        Build for all platforms"
+	@echo "  lima-image        Build custom Lima ISO (~119MB)"
+	@echo "  e2e-test         Run E2E test suite"
 	@echo "  proto            Generate protobuf code"
 	@echo "  test             Run all tests (unit)"
-	@echo "  test-unit        Run unit tests (macOS-safe)"
-	@echo "  test-integration Run integration tests (Linux + KVM)"
 	@echo "  lint             Run linter"
 	@echo "  fmt              Format code"
 	@echo "  clean            Remove build artifacts"
