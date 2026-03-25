@@ -143,8 +143,19 @@ func (m *Manager) convertToRootfs(ctx context.Context, reference, rootfsPath str
 		return fmt.Errorf("docker export: %w", err)
 	}
 
-	// Create ext4 image.
-	sizeMB := 2048 // 2GB default rootfs size.
+	// Size the ext4 image based on the exported tar + 50% headroom.
+	// This avoids creating a fixed 2GB image for a 200MB Docker export.
+	tarInfo, err := os.Stat(tarPath)
+	if err != nil {
+		return fmt.Errorf("stat tar: %w", err)
+	}
+	sizeMB := int(tarInfo.Size()/(1024*1024)*3/2) + 128 // 1.5x tar size + 128MB for overhead
+	if sizeMB < 256 {
+		sizeMB = 256 // Minimum 256MB
+	}
+	if sizeMB > 4096 {
+		sizeMB = 4096 // Cap at 4GB
+	}
 	if err := runCmd(ctx, "dd", "if=/dev/zero", "of="+rootfsPath,
 		"bs=1M", fmt.Sprintf("count=%d", sizeMB)); err != nil {
 		return fmt.Errorf("create image: %w", err)

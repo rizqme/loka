@@ -20,6 +20,7 @@ import (
 
 	"github.com/vyprai/loka/internal/config"
 	"github.com/vyprai/loka/internal/controlplane"
+	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/controlplane/api"
 	"github.com/vyprai/loka/internal/controlplane/gc"
 	"github.com/vyprai/loka/internal/controlplane/image"
@@ -419,6 +420,40 @@ func main() {
 
 	// Initialize service manager.
 	svcMgr := service.NewManager(db, registry, sched, imgMgr, objStore, logger)
+
+	// Mark stale services as stopped — VMs don't survive lokad restart,
+	// so any service in "deploying" or "running" state is orphaned.
+	for _, status := range []loka.ServiceStatus{loka.ServiceStatusRunning, loka.ServiceStatusDeploying} {
+		statusCopy := status
+		stale, _, _ := db.Services().List(ctx, store.ServiceFilter{Status: &statusCopy})
+		for _, svc := range stale {
+			svc.Status = loka.ServiceStatusStopped
+			svc.Ready = false
+			svc.ForwardPort = 0
+			svc.UpdatedAt = time.Now()
+			if err := db.Services().Update(ctx, svc); err != nil {
+				logger.Warn("failed to mark stale service", "id", svc.ID, "error", err)
+			} else {
+				logger.Info("marked stale service as stopped", "id", svc.ID, "name", svc.Name)
+			}
+		}
+	}
+
+	// Mark stale sessions as terminated — same reason as services above.
+	for _, status := range []loka.SessionStatus{loka.SessionStatusRunning, loka.SessionStatusCreating, loka.SessionStatusProvisioning} {
+		statusCopy := status
+		staleSessions, _ := db.Sessions().List(ctx, store.SessionFilter{Status: &statusCopy})
+		for _, sess := range staleSessions {
+			sess.Status = loka.SessionStatusTerminated
+			sess.Ready = false
+			sess.UpdatedAt = time.Now()
+			if err := db.Sessions().Update(ctx, sess); err != nil {
+				logger.Warn("failed to mark stale session", "id", sess.ID, "error", err)
+			} else {
+				logger.Info("marked stale session as terminated", "id", sess.ID, "name", sess.Name)
+			}
+		}
+	}
 
 	// Initialize drainer with migration callback.
 	drainer := worker.NewDrainer(registry, db, sm.MigrateSession, logger)

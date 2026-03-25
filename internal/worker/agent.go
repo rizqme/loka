@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -749,14 +750,17 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 	}
 	defer vsockConn.Close()
 
+	// Use a bufio.Reader for the protocol handshake so we can read exact
+	// lines without consuming bytes that belong to the raw TCP tunnel.
+	br := bufio.NewReader(vsockConn)
+
 	// Firecracker vsock handshake: CONNECT to port 52 (supervisor).
 	if _, err := fmt.Fprintf(vsockConn, "CONNECT 52\n"); err != nil {
 		a.logger.Debug("port forward: vsock CONNECT failed", "error", err)
 		return
 	}
-	buf := make([]byte, 32)
-	n, err := vsockConn.Read(buf)
-	if err != nil || n < 2 || string(buf[:2]) != "OK" {
+	okLine, err := br.ReadString('\n')
+	if err != nil || !strings.HasPrefix(okLine, "OK") {
 		a.logger.Debug("port forward: vsock handshake failed")
 		return
 	}
@@ -772,17 +776,16 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 		return
 	}
 
-	// Read the RPC response. Use raw read instead of json.Decoder to avoid
-	// buffering past the response boundary (the connection becomes raw TCP after).
-	respBuf := make([]byte, 4096)
-	n2, err := vsockConn.Read(respBuf)
+	// Read the RPC response line. The supervisor sends exactly one JSON line
+	// followed by a newline, then the connection becomes a raw TCP tunnel.
+	respLine, err := br.ReadString('\n')
 	if err != nil {
 		a.logger.Debug("port forward: read RPC response failed", "error", err)
 		return
 	}
 	var resp vm.RPCResponse
-	if err := json.Unmarshal(respBuf[:n2], &resp); err != nil {
-		a.logger.Debug("port forward: parse RPC response failed", "error", err, "raw", string(respBuf[:n2]))
+	if err := json.Unmarshal([]byte(respLine), &resp); err != nil {
+		a.logger.Debug("port forward: parse RPC response failed", "error", err, "raw", respLine)
 		return
 	}
 	if resp.Error != nil {
@@ -790,7 +793,18 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 		return
 	}
 
-	// Connection is now a raw TCP tunnel. Bidirectional copy.
+	// Drain any data the bufio.Reader may have buffered past the response
+	// line (e.g. the first bytes of the TCP stream from the VM service).
+	if br.Buffered() > 0 {
+		buffered := make([]byte, br.Buffered())
+		n, _ := br.Read(buffered)
+		if n > 0 {
+			clientConn.Write(buffered[:n])
+		}
+	}
+
+	// Connection is now a raw TCP tunnel. Bidirectional copy using the raw
+	// vsockConn (not the bufio.Reader) so no further buffering occurs.
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {

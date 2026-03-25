@@ -99,16 +99,26 @@ func (s *Server) handleConnection(conn net.Conn) {
 		conn.Close()
 	}()
 
-	decoder := json.NewDecoder(conn)
-	encoder := json.NewEncoder(conn)
-
-	var req vm.RPCRequest
-	if err := decoder.Decode(&req); err != nil {
-		s.logger.Error("decode request", "error", err)
-		errResp := vm.RPCResponse{Error: &vm.RPCError{Code: -1, Message: fmt.Sprintf("invalid request: %v", err)}}
-		encoder.Encode(errResp)
+	// Read the raw request bytes instead of using json.NewDecoder to avoid
+	// buffering past the JSON request boundary. This is critical for
+	// tcp_forward: after the RPC response the connection becomes a raw TCP
+	// tunnel, so any bytes consumed by a decoder's internal buffer would be
+	// lost, causing "connection reset by peer".
+	buf := make([]byte, 8192)
+	n, err := conn.Read(buf)
+	if err != nil {
 		return
 	}
+
+	var req vm.RPCRequest
+	if err := json.Unmarshal(buf[:n], &req); err != nil {
+		s.logger.Error("decode request", "error", err)
+		errResp := vm.RPCResponse{Error: &vm.RPCError{Code: -1, Message: fmt.Sprintf("invalid request: %v", err)}}
+		json.NewEncoder(conn).Encode(errResp)
+		return
+	}
+
+	encoder := json.NewEncoder(conn)
 
 	// tcp_forward is special: after the RPC response the connection becomes
 	// a raw TCP tunnel, so we handle it here instead of in handleRPC.

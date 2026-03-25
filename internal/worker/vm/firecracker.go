@@ -347,7 +347,10 @@ func buildFirecrackerConfig(cfg VMConfig, socketPath, vsockPath string) fcConfig
 		mem = 512
 	}
 
-	bootArgs := "console=ttyS0 reboot=k panic=1 pci=off init=/usr/local/bin/loka-supervisor"
+	// Kernel boot args:
+	// - ip=... configures loopback at kernel level (no userspace tools needed)
+	// - init= sets the supervisor as PID 1
+	bootArgs := "console=ttyS0 reboot=k panic=1 pci=off ip=127.0.0.1:::255.0.0.0::lo:none init=/usr/local/bin/loka-supervisor"
 
 	drives := []fcDrive{
 		{

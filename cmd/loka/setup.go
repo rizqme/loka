@@ -259,9 +259,9 @@ func deployLocalMacOS(name string, foreground bool) error {
 		return p.Run()
 	}
 
-	// Clean stale DB and start lokad.
+	// Start lokad (DB is preserved across restarts; lokad marks stale records on boot).
 	exec.Command(limactl, "shell", "loka", "sudo", "bash", "-c",
-		"rm -f /Users/*/loka.db; nohup lokad > /tmp/lokad.log 2>&1 &").Run()
+		"nohup lokad > /tmp/lokad.log 2>&1 &").Run()
 
 	// Verify lokad didn't crash immediately after starting.
 	time.Sleep(2 * time.Second)

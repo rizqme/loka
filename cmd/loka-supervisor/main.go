@@ -3,6 +3,7 @@ package main
 import (
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -23,6 +24,11 @@ import (
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	logger.Info("loka-supervisor starting", "version", version.Version)
+
+	// As PID 1 (init), mount /proc for process management.
+	// Loopback (127.0.0.1) is configured via kernel boot args (ip=...),
+	// so no userspace tools are needed regardless of the Docker image.
+	_ = exec.Command("mount", "-t", "proc", "proc", "/proc").Run()
 
 	// Default policy — will be updated by the worker via set_policy RPC.
 	policy := loka.DefaultExecPolicy()
