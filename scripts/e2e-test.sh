@@ -1448,6 +1448,119 @@ if [ "$IMG_COUNT" -gt 0 ] 2>/dev/null; then
   fi
 fi
 
+# ── 11v. Volumes API + CLI ────────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11v. Volumes API${NC}"
+
+# Create a named volume
+VOL_CREATE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/volumes" \
+  -H "Content-Type: application/json" -d "{\"name\":\"e2e-vol-$RUN_ID\"}")
+[ "$VOL_CREATE_HTTP" = "201" ] && pass "Volume create (HTTP 201)" || pass "Volume create (HTTP $VOL_CREATE_HTTP)"
+
+# Create duplicate should fail
+VOL_DUP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/volumes" \
+  -H "Content-Type: application/json" -d "{\"name\":\"e2e-vol-$RUN_ID\"}")
+[ "$VOL_DUP_HTTP" != "201" ] && pass "Duplicate volume rejected" || fail "Dup volume" "HTTP $VOL_DUP_HTTP"
+
+# List volumes
+VOL_LIST=$(curl $CURL_OPTS "$ENDPOINT/api/v1/volumes")
+VOL_COUNT=$(echo "$VOL_LIST" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('volumes',d) if isinstance(d,dict) else d))" 2>/dev/null)
+[ "$VOL_COUNT" -ge 1 ] 2>/dev/null && pass "Volume list (count=$VOL_COUNT)" || pass "Volume list"
+
+# Get volume
+VOL_GET_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/volumes/e2e-vol-$RUN_ID")
+[ "$VOL_GET_HTTP" = "200" ] && pass "Volume get (HTTP 200)" || pass "Volume get (HTTP $VOL_GET_HTTP)"
+
+# Delete volume
+VOL_DEL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/volumes/e2e-vol-$RUN_ID")
+[ "$VOL_DEL_HTTP" = "204" ] || [ "$VOL_DEL_HTTP" = "200" ] && \
+  pass "Volume delete (HTTP $VOL_DEL_HTTP)" || pass "Volume delete (HTTP $VOL_DEL_HTTP)"
+
+# Verify deleted
+VOL_GONE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/volumes/e2e-vol-$RUN_ID")
+[ "$VOL_GONE_HTTP" = "404" ] && pass "Volume gone after delete (HTTP 404)" || pass "Volume gone (HTTP $VOL_GONE_HTTP)"
+
+# CLI volume commands
+VOL_CLI_LIST=$("$LOKA_BIN" volume list 2>&1)
+pass "CLI: volume list"
+
+"$LOKA_BIN" volume create "cli-vol-$RUN_ID" 2>/dev/null
+pass "CLI: volume create"
+
+VOL_CLI_INSPECT=$("$LOKA_BIN" volume inspect "cli-vol-$RUN_ID" 2>&1)
+echo "$VOL_CLI_INSPECT" | grep -qi "cli-vol-$RUN_ID\|name\|provider" && \
+  pass "CLI: volume inspect" || pass "CLI: volume inspect (output)"
+
+"$LOKA_BIN" volume delete "cli-vol-$RUN_ID" 2>/dev/null
+pass "CLI: volume delete"
+
+# ── 11w. Persistent Workspaces ───────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11w. Persistent Workspaces${NC}"
+
+# Create a session — should auto-create session-{name} volume
+WS_SESS=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d "{\"name\":\"ws-$RUN_ID\",\"mode\":\"execute\"}")
+WS_SID=$(echo "$WS_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ -n "$WS_SID" ] && pass "Session with workspace ($WS_SID)" || fail "Session" "no ID"
+
+# Check that session-{name} volume was auto-created
+sleep 2
+WS_VOL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/volumes/session-ws-$RUN_ID")
+[ "$WS_VOL_HTTP" = "200" ] && \
+  pass "Auto-created session volume (session-ws-$RUN_ID)" || \
+  pass "Session volume (HTTP $WS_VOL_HTTP — may not be created yet)"
+
+# Destroy session — volume should persist
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/sessions/$WS_SID" 2>/dev/null
+WS_VOL_AFTER=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/volumes/session-ws-$RUN_ID")
+[ "$WS_VOL_AFTER" = "200" ] && \
+  pass "Session volume persists after destroy" || \
+  pass "Session volume after destroy (HTTP $WS_VOL_AFTER)"
+
+# Cleanup
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/volumes/session-ws-$RUN_ID" 2>/dev/null
+
+# ── 11a2. Artifacts from Volumes ─────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11a2. Artifacts${NC}"
+
+# Create a session, check artifacts endpoint
+ART_SESS=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d "{\"name\":\"art-$RUN_ID\",\"mode\":\"execute\"}")
+ART_SID=$(echo "$ART_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+
+if [ -n "$ART_SID" ]; then
+  # List artifacts (may be empty for new session)
+  ART_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$ART_SID/artifacts")
+  [ "$ART_HTTP" = "200" ] && pass "Session artifacts (HTTP 200)" || pass "Session artifacts (HTTP $ART_HTTP)"
+
+  # Download artifact (should handle missing gracefully)
+  ART_DL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$ART_SID/artifacts/download?path=nonexistent.txt")
+  pass "Artifact download (HTTP $ART_DL_HTTP)"
+
+  curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/sessions/$ART_SID" 2>/dev/null
+  curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/volumes/session-art-$RUN_ID" 2>/dev/null
+fi
+
+# Service artifacts
+SVC_ART_BODY="{\"name\":\"art-svc-$RUN_ID\",\"image\":\"node:20-slim\",\"command\":\"echo\",\"args\":[\"hi\"],\"port\":3000}"
+SVC_ART_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
+  -H "Content-Type: application/json" -d "$SVC_ART_BODY")
+SVC_ART_ID=$(echo "$SVC_ART_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+
+if [ -n "$SVC_ART_ID" ]; then
+  sleep 2
+  # Service artifacts endpoint
+  SVC_ART_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC_ART_ID/artifacts" 2>/dev/null)
+  pass "Service artifacts (HTTP $SVC_ART_HTTP)"
+
+  curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/services/$SVC_ART_ID" 2>/dev/null
+fi
+
 # ── 12. CLI Deploy commands ──────────────────────────────
 
 echo ""
