@@ -23,4 +23,7 @@ void vz_stop_vm(void* vm_handle);
 // Get VM state: 0=stopped, 1=running, 2=paused, 3=error
 int vz_vm_state(void* vm_handle);
 
+// Connect to a vsock port inside the VM. Returns a file descriptor on success, -1 on error.
+int vz_vsock_connect(void* vm_handle, uint32_t port, char** error_msg);
+
 #endif

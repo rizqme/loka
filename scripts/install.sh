@@ -12,7 +12,6 @@ VERSION="${LOKA_VERSION:-latest}"
 INSTALL_DIR="${LOKA_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${LOKA_DATA_DIR:-/var/loka}"
 FC_VERSION="${FC_VERSION:-v1.10.1}"
-LIMA_INSTANCE="loka"
 
 # ── Helpers ───────────────────────────────────────────────
 
@@ -352,15 +351,37 @@ YAML
   echo ""
 }
 
-# ── macOS install (Lima) ─────────────────────────────────
+# ── macOS install (lokavm) ────────────────────────────────
 
 install_macos() {
-  info "Installing LOKA for macOS (Lima + Firecracker)"
+  info "Installing LOKA for macOS (lokavm + VZ framework)"
 
   # Step 1: Install the loka CLI locally (macOS binary).
   echo ""
   info "Installing CLI to ${INSTALL_DIR}"
   download_binaries
+
+  # Step 2: Download and install lokavm binary.
+  echo ""
+  info "Installing lokavm"
+
+  local lokavm_url
+  if [ "$VERSION" = "latest" ]; then
+    lokavm_url="https://github.com/vyprai/loka/releases/latest/download/lokavm-darwin-${ARCH}"
+  else
+    lokavm_url="https://github.com/vyprai/loka/releases/download/${VERSION}/lokavm-darwin-${ARCH}"
+  fi
+
+  local tmp
+  tmp=$(mktemp -d)
+
+  if curl -fsSL "$lokavm_url" -o "$tmp/lokavm" 2>/dev/null; then
+    $SUDO install -m 755 "$tmp/lokavm" "${INSTALL_DIR}/lokavm"
+    ok "lokavm -> ${INSTALL_DIR}/lokavm"
+  else
+    warn "Pre-built lokavm not found. Build from source: make lokavm && sudo make install"
+  fi
+  rm -rf "$tmp"
 
   # Shell completion.
   if command -v loka &>/dev/null; then
@@ -374,168 +395,14 @@ install_macos() {
     fi
   fi
 
-  # Step 2: Install Lima if needed.
-  echo ""
-  info "Setting up Lima VM"
-  if ! command -v limactl &>/dev/null; then
-    if command -v brew &>/dev/null; then
-      echo -n "  Installing Lima..."
-      brew install lima > /dev/null 2>&1
-      echo " done"
-    else
-      fail "Homebrew not found. Install Lima manually: https://lima-vm.io"
-    fi
-  else
-    ok "Lima installed"
-  fi
-
-  # Step 3: Create Lima VM.
-  local lima_log="/tmp/lima-install-$$.log"
-
-  if limactl list -q 2>/dev/null | grep -q "^${LIMA_INSTANCE}$"; then
-    if ! limactl list 2>/dev/null | grep "$LIMA_INSTANCE" | grep -q "Running"; then
-      echo -n "  Starting VM..."
-      limactl start "$LIMA_INSTANCE" > "$lima_log" 2>&1 && echo " done" || { echo " failed"; tail -5 "$lima_log"; }
-    fi
-    ok "Lima VM running"
-  else
-    # Use custom LOKA image from GitHub releases if available,
-    # otherwise fall back to stock Alpine cloud image + provision script.
-    local img_base="https://github.com/vyprai/loka/releases/latest/download"
-    local use_custom=false
-
-    if curl -fsSL -o /dev/null -w '%{http_code}' "${img_base}/loka-lima-arm64.iso" 2>/dev/null | grep -q "^200\|^302"; then
-      use_custom=true
-    fi
-
-    local lima_config
-    lima_config=$(mktemp)
-
-    if [ "$use_custom" = true ]; then
-      # Custom image: Docker, LOKA binaries, KVM pre-installed. No provision needed.
-      cat > "$lima_config" <<LIMAEOF
-# LOKA Lima VM — pre-built image with Docker + LOKA
-
-vmType: vz
-nestedVirtualization: true
-
-containerd:
-  system: false
-  user: false
-
-images:
-  - location: "${img_base}/loka-lima-arm64.iso"
-    arch: "aarch64"
-  - location: "${img_base}/loka-lima-amd64.iso"
-    arch: "x86_64"
-
-cpus: 4
-memory: "8GiB"
-disk: "50GiB"
-
-mounts:
-  - location: "~"
-    writable: true
-
-portForwards:
-  - guestPort: 6840
-    hostPort: 6840
-  - guestPort: 6841
-    hostPort: 6841
-  - guestPort: 6843
-    hostPort: 6843
-  - guestPort: 5453
-    hostPort: 5453
-    proto: udp
-
-provision:
-  - mode: system
-    script: |
-      #!/bin/sh
-      # LOKA ISO: everything pre-built. Just link to expected paths.
-      #!/bin/sh
-      set -eux
-      [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
-      mkdir -p /var/loka/kernel /tmp/loka-data/kernel /tmp/loka-data/rootfs /tmp/loka-data/objstore
-      [ -f /usr/share/loka/vmlinux ] && cp /usr/share/loka/vmlinux /var/loka/kernel/vmlinux
-      [ -f /var/loka/kernel/vmlinux ] && ln -sf /var/loka/kernel/vmlinux /tmp/loka-data/kernel/vmlinux
-      [ -f /usr/share/loka/rootfs.ext4 ] && cp /usr/share/loka/rootfs.ext4 /tmp/loka-data/rootfs/rootfs.ext4
-LIMAEOF
-    else
-      # Stock Alpine: needs full provision.
-      cat > "$lima_config" <<'LIMAEOF'
-# LOKA Lima VM — Alpine Linux with KVM for Firecracker
-
-vmType: vz
-nestedVirtualization: true
-
-containerd:
-  system: false
-  user: false
-
-images:
-  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-aarch64-uefi-cloudinit-r0.qcow2"
-    arch: "aarch64"
-  - location: "https://dl-cdn.alpinelinux.org/alpine/v3.23/releases/cloud/nocloud_alpine-3.23.3-x86_64-uefi-cloudinit-r0.qcow2"
-    arch: "x86_64"
-
-cpus: 4
-memory: "8GiB"
-disk: "50GiB"
-
-mounts:
-  - location: "~"
-    writable: true
-
-portForwards:
-  - guestPort: 6840
-    hostPort: 6840
-  - guestPort: 6841
-    hostPort: 6841
-  - guestPort: 6843
-    hostPort: 6843
-  - guestPort: 5453
-    hostPort: 5453
-    proto: udp
-
-provision:
-  - mode: system
-    script: |
-      #!/bin/sh
-      set -eux
-      apk add --no-cache curl iptables iproute2 e2fsprogs docker
-      rc-update add docker default 2>/dev/null || true
-      service docker start 2>/dev/null || true
-      [ -e /dev/kvm ] && chmod 666 /dev/kvm || true
-      curl -fsSL https://vyprai.github.io/loka/install.sh | sh
-LIMAEOF
-    fi
-
-    echo -n "  Creating VM..."
-    limactl create --name="$LIMA_INSTANCE" --tty=false "$lima_config" > "$lima_log" 2>&1
-    rm "$lima_config"
-    echo " done"
-
-    echo -n "  Starting VM (this may take a minute)..."
-    if limactl start "$LIMA_INSTANCE" >> "$lima_log" 2>&1; then
-      echo " ready!"
-      ok "Lima VM running"
-    else
-      echo " failed"
-      warn "Check log: $lima_log"
-      tail -10 "$lima_log"
-      fail "Lima VM failed to start"
-    fi
-  fi
-
   echo ""
   echo -e "${GREEN}${BOLD}  LOKA installed successfully!${NC}"
   echo ""
   echo -e "  Get started:"
-  echo -e "    ${CYAN}loka deploy local${NC}          Start the server"
+  echo -e "    ${CYAN}loka setup local${NC}           Start the server"
   echo -e "    ${CYAN}loka session create${NC}        Create a session"
   echo -e "    ${CYAN}loka exec <id> -- echo hi${NC}  Run a command"
-  echo -e "    ${CYAN}loka deploy down${NC}           Stop"
+  echo -e "    ${CYAN}loka setup down${NC}            Stop"
   echo ""
 }
 
@@ -559,26 +426,26 @@ uninstall_previous() {
   echo ""
   info "Removing previous installation"
 
-  # Stop running lokad.
+  # Stop running lokad / lokavm.
   if pgrep -x lokad &>/dev/null; then
     echo -n "  Stopping lokad..."
-    loka deploy down 2>/dev/null || $SUDO pkill -x lokad 2>/dev/null || true
+    loka setup down 2>/dev/null || $SUDO pkill -x lokad 2>/dev/null || true
     sleep 1
     echo " done"
   fi
 
-  # On macOS: remove Lima VM.
-  if [ "$OS" = "darwin" ] && command -v limactl &>/dev/null; then
-    if limactl list -q 2>/dev/null | grep -q "^${LIMA_INSTANCE}$"; then
-      echo -n "  Removing Lima VM..."
-      limactl stop "$LIMA_INSTANCE" 2>/dev/null || true
-      limactl delete "$LIMA_INSTANCE" --force 2>/dev/null || true
+  # On macOS: kill lokavm.
+  if [ "$OS" = "darwin" ]; then
+    if pgrep -x lokavm &>/dev/null; then
+      echo -n "  Stopping lokavm..."
+      $SUDO pkill -x lokavm 2>/dev/null || true
+      sleep 1
       echo " done"
     fi
   fi
 
   # Remove binaries.
-  for bin in loka lokad loka-worker loka-supervisor; do
+  for bin in loka lokad loka-worker loka-supervisor lokavm; do
     [ -f "${INSTALL_DIR}/$bin" ] && $SUDO rm -f "${INSTALL_DIR}/$bin"
   done
   ok "Old binaries removed"

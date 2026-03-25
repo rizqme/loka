@@ -10,6 +10,8 @@ import "C"
 
 import (
 	"fmt"
+	"net"
+	"os"
 	"unsafe"
 )
 
@@ -84,4 +86,24 @@ func (vm *VM) GuestIP() string {
 // 0=stopped, 1=running, 2=paused, 3=error.
 func (vm *VM) State() int {
 	return int(C.vz_vm_state(vm.handle))
+}
+
+// DialVsock connects to a vsock port inside the VM guest.
+// Returns a net.Conn wrapping the vsock file descriptor.
+func (vm *VM) DialVsock(port uint32) (net.Conn, error) {
+	var errMsg *C.char
+	fd := C.vz_vsock_connect(vm.handle, C.uint32_t(port), &errMsg)
+	if fd < 0 {
+		msg := C.GoString(errMsg)
+		C.free(unsafe.Pointer(errMsg))
+		return nil, fmt.Errorf("vsock connect port %d: %s", port, msg)
+	}
+	// Wrap the raw file descriptor as a net.Conn.
+	file := os.NewFile(uintptr(fd), fmt.Sprintf("vsock:%d", port))
+	conn, err := net.FileConn(file)
+	file.Close() // FileConn dups the fd, so close the original.
+	if err != nil {
+		return nil, fmt.Errorf("vsock fd to conn: %w", err)
+	}
+	return conn, nil
 }

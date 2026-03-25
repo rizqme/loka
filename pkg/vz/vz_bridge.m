@@ -141,3 +141,48 @@ int vz_vm_state(void* vm_handle) {
     VZVirtualMachine* vm = (__bridge VZVirtualMachine*)vm_handle;
     return (int)vm.state;
 }
+
+int vz_vsock_connect(void* vm_handle, uint32_t port, char** error_msg) {
+    @autoreleasepool {
+        VZVirtualMachine* vm = (__bridge VZVirtualMachine*)vm_handle;
+
+        // Find the vsock device.
+        VZVirtioSocketDevice* vsockDevice = nil;
+        for (VZSocketDevice* device in vm.socketDevices) {
+            if ([device isKindOfClass:[VZVirtioSocketDevice class]]) {
+                vsockDevice = (VZVirtioSocketDevice*)device;
+                break;
+            }
+        }
+        if (!vsockDevice) {
+            set_error(error_msg, @"no vsock device found");
+            return -1;
+        }
+
+        // Connect to the specified port.
+        dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+        __block VZVirtioSocketConnection* connection = nil;
+        __block NSError* connectError = nil;
+
+        [vsockDevice connectToPort:port completionHandler:^(VZVirtioSocketConnection* conn, NSError* error) {
+            connection = conn;
+            connectError = error;
+            dispatch_semaphore_signal(sem);
+        }];
+
+        long result = dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC));
+
+        if (result != 0) {
+            set_error(error_msg, @"vsock connect timeout");
+            return -1;
+        }
+
+        if (connectError || !connection) {
+            set_error(error_msg, connectError ? [connectError localizedDescription] : @"vsock connect failed");
+            return -1;
+        }
+
+        // Return the file descriptor from the connection.
+        return (int)[connection fileDescriptor];
+    }
+}

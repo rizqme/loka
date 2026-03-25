@@ -2,8 +2,10 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"text/tabwriter"
@@ -11,7 +13,6 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/vyprai/loka/pkg/lokaapi"
-	"github.com/vyprai/loka/pkg/vm"
 )
 
 func newSetupCmd() *cobra.Command {
@@ -136,187 +137,83 @@ func deployLocalLinux(name string, foreground bool) error {
 }
 
 func deployLocalMacOS(name string, foreground bool) error {
-	// Get or create VM manager via the VMManager interface.
-	mgr, err := vm.NewManager("loka")
-	if err != nil {
-		return fmt.Errorf("VM manager not available: %w\nInstall LOKA first:\n  curl -fsSL https://vyprai.github.io/loka/install.sh | bash", err)
+	// Find lokavm binary.
+	lokavmPath := findLokaVM()
+	if lokavmPath == "" {
+		return fmt.Errorf("lokavm binary not found. Install: curl -fsSL https://vyprai.github.io/loka/install.sh | bash")
 	}
 
-	// Ensure the VM exists and is running.
-	status, _ := mgr.Status()
-	if status != vm.VMStatusRunning {
-		if status == vm.VMStatusUnknown {
-			// VM doesn't exist — create it.
-			fmt.Print("  Creating VM...")
-			home, _ := os.UserHomeDir()
-			if err := mgr.Create(vm.VMConfig{
-				Name:      "loka",
-				CPUs:      4,
-				MemoryMB:  8192,
-				DiskGB:    50,
-				SharedDir: home,
-			}); err != nil {
-				fmt.Println(" FAILED")
-				return fmt.Errorf("failed to create VM: %w", err)
-			}
-			fmt.Println(" ok")
-		}
-
-		fmt.Print("  Starting VM...")
-		if err := mgr.Start(); err != nil {
-			fmt.Println(" FAILED")
-			return fmt.Errorf("failed to start VM: %w", err)
-		}
-		fmt.Println(" ok")
-	}
-
-	fmt.Printf("Starting LOKA in VM...\n")
-
-	// Kill any existing lokad.
-	mgr.Exec("sudo", "pkill", "-f", "lokad")
-	time.Sleep(2 * time.Second)
-
-	// Ensure LOKA binaries exist inside the VM.
-	fmt.Print("  Syncing binaries...")
-	mgr.Exec("sudo", "sh", "-c", `
-		# Check if lokad already works.
-		if command -v lokad >/dev/null 2>&1 && command -v firecracker >/dev/null 2>&1; then exit 0; fi
-
-		# Try to copy from ISO overlay location.
-		for bin in lokad loka-worker loka-supervisor loka-vmagent firecracker; do
-			[ -f /usr/share/loka/$bin ] && cp /usr/share/loka/$bin /usr/local/bin/$bin && chmod +x /usr/local/bin/$bin
-		done
-		if command -v lokad >/dev/null 2>&1 && command -v firecracker >/dev/null 2>&1; then exit 0; fi
-
-		# Download from GitHub releases as last resort.
-		ARCH=$(uname -m)
-		case "$ARCH" in aarch64) GOARCH=arm64;; x86_64) GOARCH=amd64;; esac
-		cd /tmp
-		curl -fsSL "https://github.com/vyprai/loka/releases/latest/download/loka-linux-${GOARCH}.tar.gz" -o loka.tar.gz 2>/dev/null
-		tar xzf loka.tar.gz 2>/dev/null
-		for bin in lokad loka-worker loka-supervisor loka-vmagent; do
-			[ -f "$bin" ] && mv "$bin" /usr/local/bin/$bin && chmod +x /usr/local/bin/$bin
-		done
-		rm -f loka.tar.gz loka
-
-		# Firecracker.
-		if ! command -v firecracker >/dev/null 2>&1; then
-			curl -fsSL "https://github.com/firecracker-microvm/firecracker/releases/download/v1.10.1/firecracker-v1.10.1-${ARCH}.tgz" 2>/dev/null | tar -xzf - -C /tmp
-			cp "/tmp/release-v1.10.1-${ARCH}/firecracker-v1.10.1-${ARCH}" /usr/local/bin/firecracker
-			chmod +x /usr/local/bin/firecracker
-			rm -rf /tmp/release-v1.10.1-*
-		fi
-	`)
-	fmt.Println(" ok")
-
-	// Ensure rootfs + kernel exist inside the VM.
-	fmt.Print("  Checking rootfs...")
-	mgr.Exec("sudo", "sh", "-c", `
-		mkdir -p /tmp/loka-data/kernel /tmp/loka-data/rootfs /tmp/loka-data/objstore /var/loka/kernel
-
-		# Kernel: check pre-installed (ISO) or existing, else download.
-		if [ ! -f /tmp/loka-data/kernel/vmlinux ]; then
-			if [ -f /usr/share/loka/vmlinux ]; then
-				cp /usr/share/loka/vmlinux /var/loka/kernel/vmlinux
-			elif [ ! -f /var/loka/kernel/vmlinux ]; then
-				ARCH=$(uname -m)
-				curl -fsSL "https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/${ARCH}/vmlinux-5.10.bin" -o /var/loka/kernel/vmlinux 2>/dev/null
-			fi
-			ln -sf /var/loka/kernel/vmlinux /tmp/loka-data/kernel/vmlinux
-		fi
-
-		# Rootfs: check pre-installed (ISO) or existing, else build from minirootfs.
-		# Rebuild if missing or empty (check actual disk usage, not apparent size for sparse files).
-		RF_BLOCKS=$(du -k /tmp/loka-data/rootfs/rootfs.ext4 2>/dev/null | awk '{print $1}')
-		if [ ! -f /tmp/loka-data/rootfs/rootfs.ext4 ] || [ "${RF_BLOCKS:-0}" -lt 10000 ]; then
-		rm -f /tmp/loka-data/rootfs/rootfs.ext4
-			if [ -f /usr/share/loka/rootfs.ext4 ]; then
-				cp /usr/share/loka/rootfs.ext4 /tmp/loka-data/rootfs/rootfs.ext4
-			else
-				ARCH=$(uname -m)
-				curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/${ARCH}/alpine-minirootfs-3.21.3-${ARCH}.tar.gz" -o /tmp/alpine.tar.gz 2>/dev/null
-				truncate -s 4G /tmp/loka-data/rootfs/rootfs.ext4
-				mkfs.ext4 -F /tmp/loka-data/rootfs/rootfs.ext4 >/dev/null 2>&1
-				mkdir -p /tmp/mnt-rootfs
-				mount -o loop /tmp/loka-data/rootfs/rootfs.ext4 /tmp/mnt-rootfs
-				tar xzf /tmp/alpine.tar.gz -C /tmp/mnt-rootfs 2>/dev/null
-				mkdir -p /tmp/mnt-rootfs/usr/local/bin
-				cp /usr/local/bin/loka-supervisor /tmp/mnt-rootfs/usr/local/bin/loka-supervisor 2>/dev/null
-				chmod +x /tmp/mnt-rootfs/usr/local/bin/loka-supervisor 2>/dev/null
-				umount /tmp/mnt-rootfs; rmdir /tmp/mnt-rootfs; rm -f /tmp/alpine.tar.gz
-			fi
-		fi
-	`)
-	fmt.Println(" ok")
+	home, _ := os.UserHomeDir()
+	dataDir := filepath.Join(home, ".loka", "vm")
 
 	if foreground {
-		store, _ := loadDeployments()
-		store.Add(Deployment{
-			Name: name, Provider: "local", Endpoint: "https://localhost:6840",
-			Workers: 1, Status: "running", CreatedAt: time.Now(),
-			Meta: map[string]string{"runtime": "vm"},
-		})
-		store.Active = name
-		saveDeployments(store)
-
-		// Run lokad in foreground via the VM manager.
-		return execVMForeground(mgr, "sudo", "lokad")
+		// Run lokavm in foreground.
+		cmd := exec.Command(lokavmPath, "--data-dir", dataDir)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
 	}
 
-	// Start lokad (DB is preserved across restarts; lokad marks stale records on boot).
-	mgr.Exec("sudo", "bash", "-c", "nohup lokad > /tmp/lokad.log 2>&1 &")
-
-	// Verify lokad didn't crash immediately after starting.
-	time.Sleep(2 * time.Second)
-	pgrepOut, _ := mgr.Exec("pgrep", "-f", "lokad")
-	if len(strings.TrimSpace(pgrepOut)) == 0 {
-		// lokad crashed on startup — show log for debugging.
-		logOut, _ := mgr.Exec("tail", "-20", "/tmp/lokad.log")
-		return fmt.Errorf("lokad crashed on startup:\n%s", logOut)
+	// Start lokavm in background.
+	fmt.Print("Starting LOKA...")
+	logPath := filepath.Join(dataDir, "lokavm.log")
+	os.MkdirAll(dataDir, 0755)
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		return fmt.Errorf("create log file: %w", err)
 	}
+	cmd := exec.Command(lokavmPath, "--data-dir", dataDir)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	if err := cmd.Start(); err != nil {
+		logFile.Close()
+		return fmt.Errorf("start lokavm: %w", err)
+	}
+	logFile.Close()
 
-	// Wait for health — check from host (port forwarded by VM).
-	fmt.Print("  Waiting for server...")
+	// Wait for health.
+	fmt.Print(" waiting...")
 	ready := false
 	for i := 0; i < 60; i++ {
-		// Try both https (auto-TLS) and http
-		out, err := exec.Command("curl", "-sk", "--max-time", "2",
-			"https://localhost:6840/api/v1/health").Output()
-		if err == nil && strings.Contains(string(out), "ok") {
-			ready = true
-			break
+		resp, err := http.Get("http://localhost:6840/api/v1/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				ready = true
+				break
+			}
 		}
-		out, err = exec.Command("curl", "-s", "--max-time", "2",
-			"http://localhost:6840/api/v1/health").Output()
-		if err == nil && strings.Contains(string(out), "ok") {
-			ready = true
-			break
-		}
-		fmt.Print(".")
 		time.Sleep(1 * time.Second)
+		fmt.Print(".")
 	}
 	if !ready {
 		fmt.Println(" FAILED")
-		// Show last few lines of log for debugging
-		logOut, _ := mgr.Exec("sudo", "tail", "-5", "/tmp/lokad.log")
-		return fmt.Errorf("lokad did not become healthy:\n%s", logOut)
+		logOut, _ := os.ReadFile(logPath)
+		lines := strings.Split(string(logOut), "\n")
+		if len(lines) > 10 {
+			lines = lines[len(lines)-10:]
+		}
+		return fmt.Errorf("lokavm did not become healthy:\n%s", strings.Join(lines, "\n"))
 	}
 	fmt.Println(" ready!")
 
 	// Fetch CA cert from the server's /ca.crt endpoint.
 	fmt.Print("  Fetching CA certificate...")
 	caCertLocalPath := ""
-	fetched, err := fetchCACert("https://localhost:6840")
-	if err == nil && fetched != "" {
+	fetched, fetchErr := fetchCACert("https://localhost:6840")
+	if fetchErr == nil && fetched != "" {
 		caCertLocalPath = fetched
 		fmt.Printf(" %s\n", caCertLocalPath)
 	} else {
 		fmt.Println(" not available")
 	}
 
-	// Save deployment with CA cert path.
+	// Save deployment.
 	store, _ := loadDeployments()
-	meta := map[string]string{"runtime": "vm"}
+	meta := map[string]string{
+		"runtime": "lokavm",
+		"pid":     fmt.Sprint(cmd.Process.Pid),
+	}
 	if caCertLocalPath != "" {
 		meta["ca_cert"] = caCertLocalPath
 	}
@@ -328,20 +225,23 @@ func deployLocalMacOS(name string, foreground bool) error {
 	store.Active = name
 	saveDeployments(store)
 
-	fmt.Printf("LOKA %q started (VM, ports forwarded to localhost)\n", name)
-	fmt.Printf("  Endpoint: https://localhost:6840\n")
-	fmt.Printf("  Stop:     loka setup down\n")
+	fmt.Printf("LOKA started\n  Endpoint: https://localhost:6840\n  Stop: loka setup down\n")
 	return nil
 }
 
-// execVMForeground runs a command inside the VM with interactive I/O.
-func execVMForeground(mgr vm.VMManager, cmd string, args ...string) error {
-	allArgs := append([]string{cmd}, args...)
-	out, execErr := mgr.Exec(allArgs[0], allArgs[1:]...)
-	if out != "" {
-		fmt.Print(out)
+// findLokaVM searches common locations for the lokavm binary.
+func findLokaVM() string {
+	candidates := []string{
+		"lokavm",
+		"/usr/local/bin/lokavm",
+		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "lokavm"),
 	}
-	return execErr
+	for _, p := range candidates {
+		if path, err := exec.LookPath(p); err == nil {
+			return path
+		}
+	}
+	return ""
 }
 
 func newListCmd() *cobra.Command {
@@ -395,10 +295,12 @@ func newDeployDownCmd() *cobra.Command {
 				if d.Meta != nil {
 					rt = d.Meta["runtime"]
 				}
-				if rt == "vm" {
-					mgr, mgrErr := vm.NewManager("loka")
-					if mgrErr == nil {
-						mgr.Exec("sudo", "pkill", "-f", "lokad")
+				if rt == "lokavm" || rt == "vm" {
+					// Kill lokavm process.
+					if pidStr, ok := d.Meta["pid"]; ok && pidStr != "" {
+						exec.Command("kill", pidStr).Run()
+					} else {
+						exec.Command("pkill", "-f", "lokavm").Run()
 					}
 					fmt.Printf("LOKA %q stopped\n", name)
 				} else {

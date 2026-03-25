@@ -1,5 +1,5 @@
 .PHONY: all build build-linux build-all proto clean test test-unit test-integration lint fmt help \
-       install uninstall fetch-firecracker build-rootfs setup-lima e2e-test
+       install uninstall fetch-firecracker build-rootfs setup-lima e2e-test lokavm
 
 # Variables
 GO := go
@@ -16,12 +16,17 @@ LOKA_WORKER := $(BIN_DIR)/loka-worker
 LOKA_SUPERVISOR := $(BIN_DIR)/loka-supervisor
 LOKA_VMAGENT := $(BIN_DIR)/loka-vmagent
 LOKA_CLI := $(BIN_DIR)/loka
+LOKA_VM := $(BIN_DIR)/lokavm
 
 # Default target
 all: build
 
 # Build all binaries for current platform
+# lokavm is macOS-only (VZ framework); included conditionally.
 build: $(LOKAD) $(LOKA_WORKER) $(LOKA_SUPERVISOR) $(LOKA_VMAGENT) $(LOKA_CLI)
+ifeq ($(shell uname -s),Darwin)
+build: $(LOKA_VM)
+endif
 
 $(LOKAD):
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $@ ./cmd/lokad
@@ -37,6 +42,12 @@ $(LOKA_VMAGENT):
 
 $(LOKA_CLI):
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $@ ./cmd/loka
+
+$(LOKA_VM):
+	CGO_ENABLED=1 $(GO) build $(GOFLAGS) $(LDFLAGS) -o $@ ./cmd/lokavm
+
+# Standalone lokavm target (macOS only, requires CGO for VZ framework)
+lokavm: $(LOKA_VM)
 
 # Build for Linux (cross-compile from macOS)
 build-linux:
@@ -89,28 +100,18 @@ build-rootfs: build-linux
 setup-lima:
 	bash scripts/setup-lima.sh
 
-# Install LOKA locally from source (builds + installs + sets up Lima on macOS)
+# Install LOKA locally from source
 INSTALL_DIR ?= /usr/local/bin
 install: build
 ifeq ($(shell uname -s),Darwin)
-	@echo "==> Installing CLI"
+	@echo "==> Installing LOKA (macOS)"
 	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
+	sudo install -m 755 $(LOKA_VM) $(INSTALL_DIR)/lokavm
 	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
 	sudo install -m 755 $(LOKA_WORKER) $(INSTALL_DIR)/loka-worker
 	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
-	@echo "==> Setting up Lima VM"
-	@if ! command -v limactl >/dev/null 2>&1; then \
-		echo "  Installing Lima..."; \
-		brew install lima; \
-	fi
-	@if limactl list -q 2>/dev/null | grep -q "^loka$$"; then \
-		echo "  Removing old Lima VM..."; \
-		limactl stop loka --force 2>/dev/null || true; \
-		limactl delete loka --force 2>/dev/null || true; \
-	fi
-	@bash scripts/setup-lima-vm.sh
 	@echo ""
-	@echo "  LOKA installed. Run: loka deploy local"
+	@echo "  LOKA installed. Run: loka setup local"
 else
 	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
 	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
@@ -123,11 +124,10 @@ endif
 uninstall:
 	@echo "==> Uninstalling LOKA"
 ifeq ($(shell uname -s),Darwin)
-	-loka deploy down 2>/dev/null || true
-	-limactl stop loka --force 2>/dev/null || true
-	-limactl delete loka --force 2>/dev/null || true
+	-loka setup down 2>/dev/null || true
+	-pkill -f lokavm 2>/dev/null || true
 endif
-	-sudo rm -f $(INSTALL_DIR)/loka $(INSTALL_DIR)/lokad $(INSTALL_DIR)/loka-worker $(INSTALL_DIR)/loka-supervisor
+	-sudo rm -f $(INSTALL_DIR)/loka $(INSTALL_DIR)/lokad $(INSTALL_DIR)/loka-worker $(INSTALL_DIR)/loka-supervisor $(INSTALL_DIR)/lokavm
 	-sudo rm -f $(INSTALL_DIR)/firecracker
 	-rm -rf $(HOME)/.loka
 	@echo "  ✓ LOKA uninstalled"
@@ -159,8 +159,9 @@ help:
 	@echo ""
 	@echo "Targets:"
 	@echo "  build            Build all binaries for current platform"
-	@echo "  install          Build + install locally (sets up Lima on macOS)"
-	@echo "  uninstall        Remove LOKA, Lima VM, and all data"
+	@echo "  lokavm           Build lokavm binary (macOS only, VZ framework)"
+	@echo "  install          Build + install locally (lokavm on macOS)"
+	@echo "  uninstall        Remove LOKA and all data"
 	@echo "  build-linux      Cross-compile all binaries for Linux amd64"
 	@echo "  build-all        Build for all platforms"
 	@echo "  lima-image        Build custom Lima ISO (~119MB)"
