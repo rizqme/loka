@@ -2,7 +2,10 @@
 
 package vz
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+)
 
 // VM is a stub for non-macOS platforms.
 type VM struct{}
@@ -13,6 +16,7 @@ type Config struct {
 	MemoryMB  int
 	Kernel    string
 	Cmdline   string
+	Initrd    string // Optional initramfs path
 	Rootfs    string
 	SharedDir string
 	VsockPort uint32
@@ -34,3 +38,8 @@ func (vm *VM) GuestIP() string { return "" }
 
 // State returns -1 on non-macOS platforms.
 func (vm *VM) State() int { return -1 }
+
+// DialVsock is not available on non-macOS platforms.
+func (vm *VM) DialVsock(port uint32) (net.Conn, error) {
+	return nil, fmt.Errorf("not available")
+}

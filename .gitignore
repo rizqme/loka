@@ -38,3 +38,4 @@ loka.db-wal
 # Binaries (top-level)
 /loka
 /lokad
+loka-vmagent

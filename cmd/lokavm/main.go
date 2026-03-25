@@ -59,7 +59,7 @@ func main() {
 	}
 	logger.Info("lokad ready")
 
-	// 4. Start reverse proxy: host ports -> VM guest (NAT IP) -> lokad.
+	// 4. Start reverse proxy: host ports -> VM guest (vsock) -> lokad.
 	proxy := NewVsockProxy(vm, logger)
 
 	// HTTP/HTTPS API proxy.

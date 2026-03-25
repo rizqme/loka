@@ -4,13 +4,15 @@ package vm
 
 import (
 	"fmt"
+	"net"
 	"os/exec"
 	"strings"
 
 	"github.com/vyprai/loka/pkg/vz"
 )
 
-// VZManager implements VMManager using Apple's Virtualization.framework via CGO.
+// VZManager implements VMManager using Apple's Virtualization.framework
+// via the Code-Hex/vz Go library.
 type VZManager struct {
 	name   string
 	vm     *vz.VM
@@ -46,6 +48,7 @@ func (m *VZManager) Create(config VMConfig) error {
 		MemoryMB:  mem,
 		Kernel:    config.Kernel,
 		Cmdline:   cmdline,
+		Initrd:    config.Initrd,
 		Rootfs:    config.Rootfs,
 		SharedDir: config.SharedDir,
 	}
@@ -91,9 +94,9 @@ func (m *VZManager) Status() (VMStatus, error) {
 	}
 	state := m.vm.State()
 	switch state {
-	case 1: // VZVirtualMachineStateRunning
+	case 1: // VirtualMachineStateRunning
 		return VMStatusRunning, nil
-	case 0: // VZVirtualMachineStateStopped
+	case 0: // VirtualMachineStateStopped
 		return VMStatusStopped, nil
 	default:
 		return VMStatusUnknown, nil
@@ -138,4 +141,12 @@ func (m *VZManager) GuestIP() string {
 		return m.vm.GuestIP()
 	}
 	return "192.168.64.2"
+}
+
+// DialVsock connects to a vsock port inside the VM guest.
+func (m *VZManager) DialVsock(port uint32) (net.Conn, error) {
+	if m.vm == nil {
+		return nil, fmt.Errorf("VM not running")
+	}
+	return m.vm.DialVsock(port)
 }
