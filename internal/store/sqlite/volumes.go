@@ -11,7 +11,8 @@ import (
 )
 
 type volumeRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 var _ store.VolumeRepository = (*volumeRepo)(nil)
@@ -29,7 +30,7 @@ func (r *volumeRepo) Create(ctx context.Context, vol *loka.VolumeRecord) error {
 }
 
 func (r *volumeRepo) Get(ctx context.Context, name string) (*loka.VolumeRecord, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT name, provider, mount_count, created_at, updated_at FROM volumes WHERE name = ?`, name)
 	return scanVolume(row)
 }
@@ -55,7 +56,7 @@ func (r *volumeRepo) Delete(ctx context.Context, name string) error {
 }
 
 func (r *volumeRepo) List(ctx context.Context) ([]*loka.VolumeRecord, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT name, provider, mount_count, created_at, updated_at FROM volumes ORDER BY name`)
 	if err != nil {
 		return nil, err

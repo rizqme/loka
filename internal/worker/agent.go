@@ -272,6 +272,8 @@ func (a *Agent) StopSession(sessionID string) error {
 	// Close port forward listener if active.
 	if sess.PortForwardListener != nil {
 		sess.PortForwardListener.Close()
+		sess.PortForwardListener = nil
+		sess.ForwardedPort = 0
 	}
 	delete(a.sessions, sessionID)
 	a.mu.Unlock()

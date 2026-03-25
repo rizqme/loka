@@ -11,7 +11,8 @@ import (
 )
 
 type tokenRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *tokenRepo) Create(ctx context.Context, t *loka.WorkerToken) error {
@@ -30,7 +31,7 @@ func (r *tokenRepo) Get(ctx context.Context, id string) (*loka.WorkerToken, erro
 	var t loka.WorkerToken
 	var expiresAt, createdAt string
 	var used int
-	err := r.db.QueryRowContext(ctx,
+	err := r.readDB.QueryRowContext(ctx,
 		`SELECT id, name, token, expires_at, used, worker_id, created_at FROM worker_tokens WHERE id = ?`, id).
 		Scan(&t.ID, &t.Name, &t.Token, &expiresAt, &used, &t.WorkerID, &createdAt)
 	if err != nil {
@@ -49,7 +50,7 @@ func (r *tokenRepo) GetByToken(ctx context.Context, token string) (*loka.WorkerT
 	var t loka.WorkerToken
 	var expiresAt, createdAt string
 	var used int
-	err := r.db.QueryRowContext(ctx,
+	err := r.readDB.QueryRowContext(ctx,
 		`SELECT id, name, token, expires_at, used, worker_id, created_at FROM worker_tokens WHERE token = ?`, token).
 		Scan(&t.ID, &t.Name, &t.Token, &expiresAt, &used, &t.WorkerID, &createdAt)
 	if err != nil {
@@ -76,7 +77,7 @@ func (r *tokenRepo) Delete(ctx context.Context, id string) error {
 }
 
 func (r *tokenRepo) List(ctx context.Context) ([]*loka.WorkerToken, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT id, name, token, expires_at, used, worker_id, created_at FROM worker_tokens ORDER BY created_at DESC`)
 	if err != nil {
 		return nil, err

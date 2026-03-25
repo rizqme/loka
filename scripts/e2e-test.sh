@@ -839,6 +839,9 @@ else
   skip "Firecracker VM exec (no KVM)"
 fi
 
+# Brief pause for VM cleanup (TAP devices, goroutines, port forwards)
+sleep 3
+
 # ── 11. HA Mode (Raft) — Linux only ──────────────────────
 
 if [ "$IS_LINUX" = true ]; then

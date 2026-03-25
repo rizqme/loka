@@ -12,7 +12,8 @@ import (
 )
 
 type workerRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *workerRepo) Create(ctx context.Context, w *loka.Worker) error {
@@ -35,7 +36,7 @@ func (r *workerRepo) Create(ctx context.Context, w *loka.Worker) error {
 }
 
 func (r *workerRepo) Get(ctx context.Context, id string) (*loka.Worker, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, hostname, ip_address, provider, region, zone, status, labels, capacity_cpu, capacity_mem, capacity_disk, agent_version, kvm_available, created_at, updated_at, last_seen
 		 FROM workers WHERE id = ?`, id)
 	return scanWorker(row)
@@ -88,7 +89,7 @@ func (r *workerRepo) List(ctx context.Context, f store.WorkerFilter) ([]*loka.Wo
 		query += fmt.Sprintf(` OFFSET %d`, f.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list workers: %w", err)
 	}

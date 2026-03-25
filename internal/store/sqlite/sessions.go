@@ -12,7 +12,8 @@ import (
 )
 
 type sessionRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *sessionRepo) Create(ctx context.Context, s *loka.Session) error {
@@ -33,7 +34,7 @@ func (r *sessionRepo) Create(ctx context.Context, s *loka.Session) error {
 }
 
 func (r *sessionRepo) Get(ctx context.Context, id string) (*loka.Session, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, name, status, mode, worker_id, image_ref, image_id, snapshot_id, vcpus, memory_mb, labels, exec_policy, created_at, updated_at
 		 FROM sessions WHERE id = ?`, id)
 	return scanSession(row)
@@ -85,7 +86,7 @@ func (r *sessionRepo) List(ctx context.Context, f store.SessionFilter) ([]*loka.
 		query += fmt.Sprintf(` OFFSET %d`, f.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
 	}

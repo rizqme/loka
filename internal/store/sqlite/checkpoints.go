@@ -11,7 +11,8 @@ import (
 )
 
 type checkpointRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *checkpointRepo) Create(ctx context.Context, cp *loka.Checkpoint) error {
@@ -29,7 +30,7 @@ func (r *checkpointRepo) Create(ctx context.Context, cp *loka.Checkpoint) error 
 }
 
 func (r *checkpointRepo) Get(ctx context.Context, id string) (*loka.Checkpoint, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, session_id, parent_id, type, status, label, overlay_path, vmstate_path, metadata_path, created_at
 		 FROM checkpoints WHERE id = ?`, id)
 	return scanCheckpoint(row)
@@ -48,7 +49,7 @@ func (r *checkpointRepo) GetDAG(ctx context.Context, sessionID string) (*loka.Ch
 }
 
 func (r *checkpointRepo) ListBySession(ctx context.Context, sessionID string) ([]*loka.Checkpoint, error) {
-	rows, err := r.db.QueryContext(ctx,
+	rows, err := r.readDB.QueryContext(ctx,
 		`SELECT id, session_id, parent_id, type, status, label, overlay_path, vmstate_path, metadata_path, created_at
 		 FROM checkpoints WHERE session_id = ? ORDER BY created_at ASC`, sessionID)
 	if err != nil {

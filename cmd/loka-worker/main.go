@@ -87,6 +87,9 @@ func main() {
 	// Since we don't have a poll endpoint yet, the worker just sends heartbeats
 	// and waits for the CP to push commands (which happens in-process in dev mode).
 
+	// Start periodic TAP device cleanup to remove orphaned interfaces.
+	agent.VMManager().StartTAPCleaner(ctx)
+
 	// Graceful shutdown.
 	go func() {
 		sigCh := make(chan os.Signal, 1)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/vyprai/loka/internal/controlplane/session"
@@ -25,6 +26,7 @@ type LocalWorker struct {
 	sessionManager *session.Manager
 	store          store.Store // For updating service records (e.g., ForwardPort).
 	logger         *slog.Logger
+	wg             sync.WaitGroup
 }
 
 // NewLocalWorker creates and registers an embedded worker with Firecracker support.
@@ -72,8 +74,13 @@ func (lw *LocalWorker) SetStore(s store.Store) {
 func (lw *LocalWorker) Start(ctx context.Context) {
 	lw.logger.Info("local worker started", "id", lw.agent.ID())
 
+	// Start periodic TAP device cleanup to remove orphaned interfaces.
+	lw.agent.VMManager().StartTAPCleaner(ctx)
+
 	// Command processing loop.
+	lw.wg.Add(1)
 	go func() {
+		defer lw.wg.Done()
 		for {
 			select {
 			case <-ctx.Done():
@@ -89,7 +96,9 @@ func (lw *LocalWorker) Start(ctx context.Context) {
 	}()
 
 	// Heartbeat loop — keeps the worker alive in the health monitor.
+	lw.wg.Add(1)
 	go func() {
+		defer lw.wg.Done()
 		ticker := time.NewTicker(5 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -104,6 +113,20 @@ func (lw *LocalWorker) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+// Stop waits for all in-flight goroutines to finish with a timeout.
+func (lw *LocalWorker) Stop() {
+	done := make(chan struct{})
+	go func() {
+		lw.wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		lw.logger.Warn("local worker stop timed out waiting for goroutines")
+	}
 }
 
 func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCommand) {
@@ -131,7 +154,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "exec":
 		data := cmd.Data.(cpworker.ExecCommandData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			result := lw.agent.ExecCommands(ctx, data.SessionID, data.ExecID, data.Commands, data.Parallel)
 			// Report results back to session manager.
 			if err := lw.sessionManager.CompleteExecution(ctx, data.ExecID,
@@ -156,7 +181,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "approve_exec":
 		data := cmd.Data.(cpworker.ApproveExecData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			// Mark command IDs as approved on the proxy, then re-execute.
 			if err := lw.agent.ApproveOnProxy(data.SessionID, data.CommandIDs); err != nil {
 				lw.logger.Error("failed to approve on proxy", "exec", data.ExecID, "error", err)
@@ -189,7 +216,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "create_checkpoint":
 		data := cmd.Data.(cpworker.CreateCheckpointData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			result := lw.agent.CreateCheckpoint(ctx, data.SessionID, data.CheckpointID, data.Type)
 			if err := lw.sessionManager.CompleteCheckpoint(ctx, data.CheckpointID,
 				result.Success, result.OverlayKey, result.Error); err != nil {
@@ -199,7 +228,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "restore_checkpoint":
 		data := cmd.Data.(cpworker.RestoreCheckpointData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			if err := lw.agent.RestoreCheckpoint(ctx, data.SessionID, data.CheckpointID, data.OverlayKey); err != nil {
 				lw.logger.Error("failed to restore checkpoint", "checkpoint", data.CheckpointID, "error", err)
 			} else {
@@ -209,7 +240,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "launch_service":
 		data := cmd.Data.(cpworker.LaunchServiceData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			if err := lw.agent.LaunchService(ctx, data.ServiceID, worker.ServiceLaunchOpts{
 				ImageRef:             data.ImageRef,
 				VCPUs:                data.VCPUs,
@@ -265,7 +298,9 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 
 	case "snapshot_service":
 		data := cmd.Data.(cpworker.SnapshotServiceData)
+		lw.wg.Add(1)
 		go func() {
+			defer lw.wg.Done()
 			lw.handleSnapshotService(ctx, data.ServiceID)
 		}()
 

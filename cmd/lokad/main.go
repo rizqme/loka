@@ -482,6 +482,7 @@ func main() {
 	}
 
 	// Start embedded local worker unless running as control plane only.
+	var localWorker *controlplane.LocalWorker
 	if cfg.Role != "controlplane" {
 		fcConfig := vm.FirecrackerConfig{
 			BinaryPath: envOrDefault("LOKA_FIRECRACKER_BIN", "/usr/local/bin/firecracker"),
@@ -490,7 +491,8 @@ func main() {
 			DataDir:    cfg.DataDir + "/worker-data",
 		}
 		dataDir := cfg.DataDir + "/worker-data"
-		localWorker, err := controlplane.NewLocalWorker(registry, sm, objStore, dataDir, fcConfig, logger)
+		var err error
+		localWorker, err = controlplane.NewLocalWorker(registry, sm, objStore, dataDir, fcConfig, logger)
 		if err != nil {
 			logger.Error("failed to create local worker", "error", err)
 			os.Exit(1)
@@ -623,6 +625,11 @@ func main() {
 		<-sigCh
 		logger.Info("shutting down...")
 		cancel()
+		if localWorker != nil {
+			localWorker.Stop()
+		}
+		sm.Close()
+		svcMgr.Close()
 		if domainServer != nil {
 			domainServer.Shutdown(context.Background())
 		}

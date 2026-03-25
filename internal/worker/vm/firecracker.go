@@ -251,7 +251,7 @@ func (m *Manager) Launch(ctx context.Context, id string, cfg VMConfig) (*MicroVM
 	return microVM, nil
 }
 
-// Stop stops a running VM.
+// Stop stops a running VM, waits for the process to exit, and cleans up resources.
 func (m *Manager) Stop(id string) error {
 	m.mu.Lock()
 	vm, ok := m.vms[id]
@@ -268,12 +268,33 @@ func (m *Manager) Stop(id string) error {
 		return nil
 	}
 
+	// Cancel context (sends SIGKILL via CommandContext).
 	vm.cancel()
+
+	// Wait for the process to exit with a timeout.
+	done := make(chan struct{})
+	go func() {
+		vm.cmd.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		// Process exited cleanly.
+	case <-time.After(5 * time.Second):
+		// Force kill if still running after timeout.
+		if vm.cmd.Process != nil {
+			vm.cmd.Process.Kill()
+		}
+		m.logger.Warn("VM process force-killed after timeout", "id", id, "pid", vm.PID)
+	}
+
 	vm.State = VMStateStopped
 
 	// Clean up TAP device.
 	if vm.TapName != "" {
-		destroyTAP(vm.TapName)
+		if err := destroyTAP(vm.TapName); err != nil {
+			m.logger.Warn("failed to destroy TAP device", "id", id, "tap", vm.TapName, "error", err)
+		}
 	}
 
 	// Clean up socket files.
@@ -540,6 +561,57 @@ func firecrackerAPICall(socketPath, method, path, body string) error {
 	return nil
 }
 
+// StartTAPCleaner starts a background goroutine that periodically removes
+// orphaned TAP interfaces (those not associated with any running VM).
+func (m *Manager) StartTAPCleaner(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				m.cleanupOrphanedTAPs()
+			}
+		}
+	}()
+}
+
+// cleanupOrphanedTAPs lists all tap* interfaces on the host and removes any
+// that are not associated with a currently tracked VM.
+func (m *Manager) cleanupOrphanedTAPs() {
+	out, err := exec.Command("ip", "-o", "link", "show", "type", "tun").Output()
+	if err != nil {
+		return
+	}
+
+	// Build a set of TAP names owned by running VMs.
+	m.mu.Lock()
+	activeTAPs := make(map[string]bool, len(m.vms))
+	for _, vm := range m.vms {
+		if vm.TapName != "" {
+			activeTAPs[vm.TapName] = true
+		}
+	}
+	m.mu.Unlock()
+
+	for _, line := range strings.Split(string(out), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+		name := strings.TrimSuffix(parts[1], ":")
+		if strings.HasPrefix(name, "tap") && !activeTAPs[name] {
+			if err := destroyTAP(name); err != nil {
+				m.logger.Warn("failed to clean up orphaned TAP", "name", name, "error", err)
+			} else {
+				m.logger.Info("cleaned up orphaned TAP", "name", name)
+			}
+		}
+	}
+}
+
 // cleanupStaleTAPs removes TAP interfaces left over from previous lokad runs.
 func (m *Manager) cleanupStaleTAPs() {
 	out, err := exec.Command("ip", "-o", "link", "show", "type", "tun").Output()
@@ -580,8 +652,12 @@ func createTAP(tapName, hostCIDR string) error {
 }
 
 // destroyTAP removes a TAP network device from the host.
-func destroyTAP(tapName string) {
-	exec.Command("ip", "link", "del", tapName).Run()
+// Returns any error from the ip command for logging purposes.
+func destroyTAP(tapName string) error {
+	if out, err := exec.Command("ip", "link", "del", tapName).CombinedOutput(); err != nil {
+		return fmt.Errorf("destroy TAP %s: %w (%s)", tapName, err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
 
 // EnableIPForwarding enables IPv4 forwarding and sets up NAT masquerading

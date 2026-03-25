@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -48,11 +49,22 @@ type Manager struct {
 	images    *image.Manager
 	objStore  objstore.ObjectStore
 	logger    *slog.Logger
+
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewManager creates a new session manager.
 func NewManager(s store.Store, reg *worker.Registry, sched *scheduler.Scheduler, imgMgr *image.Manager, objStore objstore.ObjectStore, logger *slog.Logger) *Manager {
-	return &Manager{store: s, registry: reg, scheduler: sched, images: imgMgr, objStore: objStore, logger: logger}
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Manager{store: s, registry: reg, scheduler: sched, images: imgMgr, objStore: objStore, logger: logger, ctx: ctx, cancel: cancel}
+}
+
+// Close cancels all in-flight goroutines and waits for them to finish.
+func (m *Manager) Close() {
+	m.cancel()
+	m.wg.Wait()
 }
 
 // Create creates a new session and schedules it to a worker.
@@ -176,8 +188,10 @@ func (m *Manager) Create(ctx context.Context, opts CreateOpts) (*loka.Session, e
 			sessionID := s.ID
 			workerID := s.WorkerID
 			imageRef := s.ImageRef
+			m.wg.Add(1)
 			go func() {
-				pullCtx := context.Background()
+				defer m.wg.Done()
+				pullCtx := m.ctx
 				m.logger.Info("pulling image for session", "session", sessionID, "image", imageRef)
 
 				m.UpdateStatusMessage(pullCtx, sessionID, "pulling image")

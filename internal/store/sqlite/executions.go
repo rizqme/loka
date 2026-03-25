@@ -12,7 +12,8 @@ import (
 )
 
 type executionRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *executionRepo) Create(ctx context.Context, e *loka.Execution) error {
@@ -32,7 +33,7 @@ func (r *executionRepo) Create(ctx context.Context, e *loka.Execution) error {
 }
 
 func (r *executionRepo) Get(ctx context.Context, id string) (*loka.Execution, error) {
-	row := r.db.QueryRowContext(ctx,
+	row := r.readDB.QueryRowContext(ctx,
 		`SELECT id, session_id, status, parallel, commands, results, created_at, updated_at
 		 FROM executions WHERE id = ?`, id)
 	return scanExecution(row)
@@ -68,7 +69,7 @@ func (r *executionRepo) ListBySession(ctx context.Context, sessionID string, f s
 		query += fmt.Sprintf(` OFFSET %d`, f.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list executions: %w", err)
 	}

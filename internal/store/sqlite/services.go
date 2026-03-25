@@ -12,7 +12,8 @@ import (
 )
 
 type serviceRepo struct {
-	db *sql.DB
+	db     *sql.DB // write pool
+	readDB *sql.DB // read pool
 }
 
 func (r *serviceRepo) Create(ctx context.Context, svc *loka.Service) error {
@@ -44,7 +45,7 @@ func (r *serviceRepo) Create(ctx context.Context, svc *loka.Service) error {
 }
 
 func (r *serviceRepo) Get(ctx context.Context, id string) (*loka.Service, error) {
-	row := r.db.QueryRowContext(ctx, serviceSelectSQL+` WHERE id = ?`, id)
+	row := r.readDB.QueryRowContext(ctx, serviceSelectSQL+` WHERE id = ?`, id)
 	return scanService(row)
 }
 
@@ -100,7 +101,7 @@ func (r *serviceRepo) List(ctx context.Context, f store.ServiceFilter) ([]*loka.
 
 	// Count total matching rows.
 	var total int
-	err := r.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM services`+where, args...).Scan(&total)
+	err := r.readDB.QueryRowContext(ctx, `SELECT COUNT(*) FROM services`+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, fmt.Errorf("count services: %w", err)
 	}
@@ -115,7 +116,7 @@ func (r *serviceRepo) List(ctx context.Context, f store.ServiceFilter) ([]*loka.
 		args = append(args, f.Offset)
 	}
 
-	rows, err := r.db.QueryContext(ctx, query, args...)
+	rows, err := r.readDB.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("list services: %w", err)
 	}

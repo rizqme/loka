@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -17,32 +19,52 @@ func init() {
 }
 
 // Store implements store.Store backed by SQLite.
+// Uses separate read/write pools: writes go through a single connection
+// (SQLite serializes writes), reads use a parallel pool with WAL mode.
 type Store struct {
-	db *sql.DB
+	db     *sql.DB // Write pool (MaxOpenConns=1, serialized)
+	readDB *sql.DB // Read pool (MaxOpenConns=N, parallel via WAL)
 }
 
-// New creates a new SQLite store.
+// New creates a new SQLite store with separate read/write connection pools.
+// For in-memory databases (:memory:), both pools share a single connection
+// because each :memory: open creates a distinct database.
 func New(dsn string) (*Store, error) {
-	db, err := sql.Open("sqlite", dsn)
+	// Build DSN with pragmas that apply to ALL connections.
+	pragmas := "_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(ON)&_pragma=synchronous(NORMAL)"
+	sep := "?"
+	if strings.Contains(dsn, "?") {
+		sep = "&"
+	}
+	fullDSN := dsn + sep + pragmas
+
+	// Writer: single connection, serialized writes. No SQLITE_BUSY possible.
+	writeDB, err := sql.Open("sqlite", fullDSN)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("open sqlite (write): %w", err)
 	}
-	// Enable WAL mode for better concurrent read performance.
-	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set WAL mode: %w", err)
+	writeDB.SetMaxOpenConns(1)
+	writeDB.SetMaxIdleConns(1)
+	writeDB.SetConnMaxLifetime(0) // Don't expire the writer.
+	writeDB.Exec("PRAGMA auto_vacuum=INCREMENTAL")
+
+	// In-memory databases: each sql.Open(":memory:") creates a separate DB,
+	// so the read pool must share the same handle as the writer.
+	if dsn == ":memory:" {
+		return &Store{db: writeDB, readDB: writeDB}, nil
 	}
-	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("enable foreign keys: %w", err)
+
+	// Reader: multiple connections for parallel reads via WAL.
+	readDB, err := sql.Open("sqlite", fullDSN+"&_pragma=query_only(ON)")
+	if err != nil {
+		writeDB.Close()
+		return nil, fmt.Errorf("open sqlite (read): %w", err)
 	}
-	// Enable incremental auto-vacuum so that SQLite reclaims free pages
-	// automatically without the cost/lock of a full VACUUM.
-	if _, err := db.Exec("PRAGMA auto_vacuum=INCREMENTAL"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("set auto_vacuum: %w", err)
-	}
-	return &Store{db: db}, nil
+	readDB.SetMaxOpenConns(8)
+	readDB.SetMaxIdleConns(4)
+	readDB.SetConnMaxLifetime(5 * time.Minute)
+
+	return &Store{db: writeDB, readDB: readDB}, nil
 }
 
 func (s *Store) Migrate(ctx context.Context) error {
@@ -72,17 +94,28 @@ func (s *Store) DB() *sql.DB {
 	return s.db
 }
 
+// ReadDB returns the read-only connection pool for operations that need
+// direct read access (e.g., health checks).
+func (s *Store) ReadDB() *sql.DB {
+	return s.readDB
+}
+
 func (s *Store) Close() error {
+	if s.readDB != s.db { // Don't double-close when both point to the same DB (tests).
+		if err := s.readDB.Close(); err != nil {
+			return err
+		}
+	}
 	return s.db.Close()
 }
 
-func (s *Store) Sessions() store.SessionRepository      { return &sessionRepo{db: s.db} }
-func (s *Store) Executions() store.ExecutionRepository   { return &executionRepo{db: s.db} }
-func (s *Store) Checkpoints() store.CheckpointRepository { return &checkpointRepo{db: s.db} }
-func (s *Store) Workers() store.WorkerRepository         { return &workerRepo{db: s.db} }
-func (s *Store) Tokens() store.TokenRepository           { return &tokenRepo{db: s.db} }
-func (s *Store) Services() store.ServiceRepository       { return &serviceRepo{db: s.db} }
-func (s *Store) Volumes() store.VolumeRepository         { return &volumeRepo{db: s.db} }
+func (s *Store) Sessions() store.SessionRepository      { return &sessionRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Executions() store.ExecutionRepository   { return &executionRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Checkpoints() store.CheckpointRepository { return &checkpointRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Workers() store.WorkerRepository         { return &workerRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Tokens() store.TokenRepository           { return &tokenRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Services() store.ServiceRepository       { return &serviceRepo{db: s.db, readDB: s.readDB} }
+func (s *Store) Volumes() store.VolumeRepository         { return &volumeRepo{db: s.db, readDB: s.readDB} }
 
 var _ store.Store = (*Store)(nil)
 

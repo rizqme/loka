@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"testing"
 	"time"
@@ -13,10 +14,14 @@ import (
 
 func setupTestDB(t *testing.T) *Store {
 	t.Helper()
-	s, err := New(":memory:")
+	// In-memory SQLite: use a single connection for both read and write pools.
+	// Each :memory: open creates a separate database, so we share one handle.
+	db, err := sql.Open("sqlite", ":memory:?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
 		t.Fatal(err)
 	}
+	db.SetMaxOpenConns(1)
+	s := &Store{db: db, readDB: db}
 	if err := s.Migrate(context.Background()); err != nil {
 		t.Fatal(err)
 	}
