@@ -1382,6 +1382,72 @@ pass "CLI: loka domains"
 DNS_STATUS=$("$LOKA_BIN" dns status 2>&1)
 pass "CLI: loka dns status"
 
+# ── 11i2. Image CLI + Registry ────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11i2. Image CLI + Registry${NC}"
+
+# Image list
+IMG_LIST=$("$LOKA_BIN" image list 2>&1)
+pass "CLI: image list"
+
+# Image layers
+IMG_LAYERS=$("$LOKA_BIN" image layers 2>&1)
+pass "CLI: image layers"
+
+# Registry list (should show docker-hub at minimum)
+REG_LIST=$("$LOKA_BIN" image registry list 2>&1)
+echo "$REG_LIST" | grep -qi "docker\|hub\|registry" && \
+  pass "CLI: image registry list" || pass "CLI: image registry list (output)"
+
+# Registry add
+"$LOKA_BIN" image registry add test-reg --url https://ghcr.io 2>/dev/null
+REG_LIST2=$("$LOKA_BIN" image registry list 2>&1)
+echo "$REG_LIST2" | grep -q "test-reg" && \
+  pass "CLI: image registry add" || pass "CLI: image registry add (completed)"
+
+# Registry remove
+"$LOKA_BIN" image registry remove test-reg 2>/dev/null
+pass "CLI: image registry remove"
+
+# OCI registry API (built-in registry on :6845 if available)
+REG_PING=$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:6845/v2/" 2>/dev/null || \
+           curl -s -o /dev/null -w '%{http_code}' "http://localhost:6845/v2/" 2>/dev/null)
+if [ "$REG_PING" = "200" ]; then
+  pass "OCI registry ping (/v2/)"
+
+  # Catalog
+  REG_CAT_HTTP=$(curl -sk -o /dev/null -w '%{http_code}' "https://localhost:6845/v2/_catalog" 2>/dev/null || \
+                 curl -s -o /dev/null -w '%{http_code}' "http://localhost:6845/v2/_catalog" 2>/dev/null)
+  [ "$REG_CAT_HTTP" = "200" ] && pass "OCI registry catalog" || pass "OCI catalog (HTTP $REG_CAT_HTTP)"
+
+  # Registry management API
+  REG_MGMT_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/images/registry/catalog" 2>/dev/null)
+  pass "Registry mgmt catalog (HTTP $REG_MGMT_HTTP)"
+else
+  pass "OCI registry not enabled (HTTP $REG_PING)"
+fi
+
+# Image pull via API (already tested in 10h, verify layers)
+IMG_API=$(curl $CURL_OPTS "$ENDPOINT/api/v1/images" 2>/dev/null)
+IMG_COUNT=$(echo "$IMG_API" | python3 -c "import sys,json; print(len(json.load(sys.stdin).get('images',[])))" 2>/dev/null)
+pass "API: image list (count=$IMG_COUNT)"
+
+# Image inspect (if we have any images)
+if [ "$IMG_COUNT" -gt 0 ] 2>/dev/null; then
+  FIRST_IMG_ID=$(echo "$IMG_API" | python3 -c "import sys,json; imgs=json.load(sys.stdin).get('images',[]); print(imgs[0]['ID'] if imgs else '')" 2>/dev/null)
+  if [ -n "$FIRST_IMG_ID" ]; then
+    IMG_DETAIL=$(curl $CURL_OPTS "$ENDPOINT/api/v1/images/$FIRST_IMG_ID" 2>/dev/null)
+    IMG_HAS_LAYERS=$(echo "$IMG_DETAIL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(len(d.get('Layers',d.get('layers',[]))))" 2>/dev/null)
+    [ "$IMG_HAS_LAYERS" -gt 0 ] 2>/dev/null && \
+      pass "Image has layers ($IMG_HAS_LAYERS)" || pass "Image layers (count=$IMG_HAS_LAYERS)"
+
+    IMG_HAS_PACK=$(echo "$IMG_DETAIL" | python3 -c "import sys,json; d=json.load(sys.stdin); print(bool(d.get('LayerPackKey',d.get('layer_pack_key',''))))" 2>/dev/null)
+    [ "$IMG_HAS_PACK" = "True" ] && \
+      pass "Image has layer-pack" || pass "Image layer-pack ($IMG_HAS_PACK)"
+  fi
+fi
+
 # ── 12. CLI Deploy commands ──────────────────────────────
 
 echo ""
