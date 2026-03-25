@@ -1,164 +1,145 @@
 #!/usr/bin/env bash
-# Build an elastic Alpine rootfs for the LOKA VZ VM.
-# Output: build/loka-rootfs.ext4 (sparse, 50GB virtual, ~20MB actual)
+# Build an elastic Alpine rootfs for lokavm. No Docker required.
 #
-# The rootfs includes:
-#   - Alpine base system with openrc
-#   - loka-vmagent: in-VM exec agent (auto-started on boot via vsock:2222)
-#   - loka-supervisor: session sandbox process
-#   - lokad: control plane / worker daemon
-#   - fstrim cron for elastic disk reclaim
+# Just: download Alpine minirootfs tarball + inject LOKA binaries.
+# Needs: mkfs.ext4, sudo (for loop mount), curl, Go (for cross-compile)
 #
-# Usage:
-#   bash scripts/build-rootfs.sh                    # default output
-#   bash scripts/build-rootfs.sh build/custom.ext4  # custom output path
-#
-# Requires: Docker (or podman), mkfs.ext4, sudo (for mount/umount)
+# Output: build/loka-rootfs.ext4 (sparse 50GB, ~30MB actual)
 
 set -euo pipefail
 
 OUT="${1:-build/loka-rootfs.ext4}"
 ARCH=$(uname -m)
-[ "$ARCH" = "arm64" ] && ARCH="aarch64"
-[ "$ARCH" = "x86_64" ] && true  # already correct
-
-ALPINE_VERSION="3.21"
-ALPINE_RELEASE="3.21.3"
-
-mkdir -p "$(dirname "$OUT")"
-
-# ── Step 1: Build Linux binaries via Docker ──────────────
-
-echo "==> Building Linux binaries"
-
-# Determine Go arch for cross-compilation.
 case "$ARCH" in
-  aarch64) GOARCH=arm64 ;;
-  x86_64)  GOARCH=amd64 ;;
-  *)       echo "Unsupported arch: $ARCH"; exit 1 ;;
+  arm64|aarch64) ARCH=aarch64; GOARCH=arm64 ;;
+  x86_64)        ARCH=x86_64;  GOARCH=amd64 ;;
+  *) echo "Unsupported: $ARCH"; exit 1 ;;
 esac
 
-BIN_DIR="bin/linux-${GOARCH}"
-mkdir -p "$BIN_DIR"
+ALPINE_VER="3.21"
+ALPINE_REL="3.21.3"
+ALPINE_URL="https://dl-cdn.alpinelinux.org/alpine/v${ALPINE_VER}/releases/${ARCH}/alpine-minirootfs-${ALPINE_REL}-${ARCH}.tar.gz"
+FC_VER="v1.10.1"
+FC_URL="https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VER}/firecracker-${FC_VER}-${ARCH}.tgz"
+KERNEL_URL="https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/${ARCH}/vmlinux-5.10.bin"
 
-# Cross-compile if binaries don't exist.
-for bin in lokad loka-worker loka-supervisor loka-vmagent; do
-  if [ ! -f "$BIN_DIR/$bin" ]; then
-    echo "    Building $bin for linux/$GOARCH..."
-    GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w" -o "$BIN_DIR/$bin" "./cmd/$bin"
-  fi
+mkdir -p "$(dirname "$OUT")" build/cache
+
+# ── Step 1: Cross-compile Linux binaries ─────────────────
+
+echo "==> Cross-compiling Linux binaries (${GOARCH})"
+BIN="build/linux-${GOARCH}"
+mkdir -p "$BIN"
+for cmd in lokad loka-worker loka-supervisor loka-vmagent; do
+  [ -f "$BIN/$cmd" ] && continue
+  echo "    $cmd"
+  CGO_ENABLED=0 GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w" -o "$BIN/$cmd" "./cmd/$cmd" 2>/dev/null || \
+  GOOS=linux GOARCH="$GOARCH" go build -trimpath -ldflags "-s -w" -o "$BIN/$cmd" "./cmd/$cmd"
 done
 
-# ── Step 2: Create elastic sparse ext4 image ────────────
+# ── Step 2: Download dependencies (cached) ───────────────
 
-echo "==> Creating elastic rootfs (50GB virtual, sparse)"
+echo "==> Downloading dependencies"
+
+# Alpine minirootfs
+ALPINE_TAR="build/cache/alpine-${ARCH}.tar.gz"
+if [ ! -f "$ALPINE_TAR" ]; then
+  echo "    Alpine minirootfs..."
+  curl -fsSL "$ALPINE_URL" -o "$ALPINE_TAR"
+fi
+
+# Firecracker binary
+FC_BIN="build/cache/firecracker-${ARCH}"
+if [ ! -f "$FC_BIN" ]; then
+  echo "    Firecracker ${FC_VER}..."
+  curl -fsSL "$FC_URL" | tar -xzf - -C build/cache
+  cp "build/cache/release-${FC_VER}-${ARCH}/firecracker-${FC_VER}-${ARCH}" "$FC_BIN"
+  rm -rf "build/cache/release-${FC_VER}-${ARCH}"
+fi
+
+# Kernel
+KERNEL="build/vmlinux"
+if [ ! -f "$KERNEL" ]; then
+  echo "    Kernel (vmlinux-5.10)..."
+  curl -fsSL "$KERNEL_URL" -o "$KERNEL"
+fi
+
+# ── Step 3: Create sparse ext4 image ─────────────────────
+
+echo "==> Creating rootfs (50GB sparse)"
 rm -f "$OUT"
 truncate -s 50G "$OUT"
 mkfs.ext4 -F -q "$OUT"
 
-# ── Step 3: Populate via Docker (no host root needed for this part) ──
+# ── Step 4: Populate (sudo mount) ────────────────────────
 
-TMP=$(mktemp -d)
-trap 'rm -rf "$TMP"' EXIT
+echo "==> Populating rootfs"
+MNT=$(mktemp -d)
+sudo mount -o loop "$OUT" "$MNT"
 
-cat > "$TMP/Dockerfile" <<DOCKER
-FROM alpine:${ALPINE_VERSION}
+# Extract Alpine base
+sudo tar xzf "$ALPINE_TAR" -C "$MNT"
 
-# Install essential packages.
-RUN apk add --no-cache \
-    openrc busybox-initscripts e2fsprogs iproute2 iptables \
-    util-linux-misc coreutils bash python3 git curl \
-    && rm -rf /var/cache/apk/*
+# Copy DNS for package install
+sudo cp /etc/resolv.conf "$MNT/etc/resolv.conf" 2>/dev/null || true
 
-# Create loka directories.
-RUN mkdir -p /usr/local/bin /env/bin /workspace /tmp /var/loka /tmp/loka-data
+# Install packages via chroot (apk is in the minirootfs)
+sudo chroot "$MNT" /sbin/apk add --no-cache \
+  openrc busybox-initscripts e2fsprogs iproute2 iptables util-linux 2>&1 | tail -1
 
-# Enable essential services.
-RUN rc-update add devfs sysinit && \
-    rc-update add procfs boot && \
-    rc-update add sysfs boot
+# Inject LOKA binaries
+sudo mkdir -p "$MNT/usr/local/bin"
+for bin in lokad loka-worker loka-supervisor loka-vmagent; do
+  [ -f "$BIN/$bin" ] && sudo cp "$BIN/$bin" "$MNT/usr/local/bin/$bin"
+done
+sudo cp "$FC_BIN" "$MNT/usr/local/bin/firecracker"
+sudo chmod +x "$MNT/usr/local/bin/"*
 
-# Network setup.
-RUN printf 'auto lo\niface lo inet loopback\nauto eth0\niface eth0 inet dhcp\n' > /etc/network/interfaces
+# Kernel for Firecracker microVMs inside the VM
+sudo mkdir -p "$MNT/tmp/loka-data/kernel" "$MNT/tmp/loka-data/rootfs" "$MNT/tmp/loka-data/objstore"
+sudo cp "$KERNEL" "$MNT/tmp/loka-data/kernel/vmlinux"
 
-# fstab with discard for elastic disk.
-RUN echo '/dev/vda / ext4 defaults,discard 0 1' > /etc/fstab
-
-# fstrim cron for elastic disk reclaim.
-RUN mkdir -p /etc/crontabs && echo '*/5 * * * * fstrim / 2>/dev/null' > /etc/crontabs/root
-
-# Set PATH.
-ENV PATH="/env/bin:/usr/local/bin:/usr/bin:/bin"
-DOCKER
-
-echo "    Building Docker image..."
-docker build -t loka-rootfs-builder "$TMP" -q
-
-echo "    Extracting rootfs..."
-CONTAINER_ID=$(docker create loka-rootfs-builder)
-docker export "$CONTAINER_ID" > "$TMP/rootfs.tar"
-docker rm "$CONTAINER_ID" >/dev/null
-
-# ── Step 4: Mount and populate image ────────────────────
-
-echo "==> Populating rootfs image"
-MOUNT_DIR="$TMP/mount"
-mkdir -p "$MOUNT_DIR"
-
-if command -v guestmount &>/dev/null; then
-  # Use libguestfs if available (no root needed).
-  guestmount -a "$OUT" -i "$MOUNT_DIR"
-  tar -xf "$TMP/rootfs.tar" -C "$MOUNT_DIR"
-
-  # Inject LOKA binaries.
-  for bin in lokad loka-worker loka-supervisor loka-vmagent; do
-    [ -f "$BIN_DIR/$bin" ] && cp "$BIN_DIR/$bin" "$MOUNT_DIR/usr/local/bin/$bin"
-  done
-  chmod +x "$MOUNT_DIR/usr/local/bin/"* 2>/dev/null || true
-
-  # Create vmagent init script.
-  cat > "$MOUNT_DIR/etc/init.d/loka-vmagent" <<'INITSCRIPT'
+# lokad init script
+cat << 'EOF' | sudo tee "$MNT/etc/init.d/lokad" > /dev/null
 #!/sbin/openrc-run
-description="LOKA VM Agent"
-command="/usr/local/bin/loka-vmagent"
+command="/usr/local/bin/lokad"
 command_background=true
-pidfile="/run/loka-vmagent.pid"
-output_log="/var/log/loka-vmagent.log"
-error_log="/var/log/loka-vmagent.log"
-INITSCRIPT
-  chmod +x "$MOUNT_DIR/etc/init.d/loka-vmagent"
+pidfile="/run/lokad.pid"
+output_log="/var/log/lokad.log"
+error_log="/var/log/lokad.log"
+EOF
+sudo chmod +x "$MNT/etc/init.d/lokad"
 
-  # Enable vmagent on boot (write symlink directly since we can't chroot in guestmount).
-  mkdir -p "$MOUNT_DIR/etc/runlevels/default"
-  ln -sf /etc/init.d/loka-vmagent "$MOUNT_DIR/etc/runlevels/default/loka-vmagent"
+# Enable services
+sudo chroot "$MNT" rc-update add devfs sysinit 2>/dev/null
+sudo chroot "$MNT" rc-update add procfs boot 2>/dev/null
+sudo chroot "$MNT" rc-update add sysfs boot 2>/dev/null
+sudo chroot "$MNT" rc-update add networking boot 2>/dev/null
+sudo chroot "$MNT" rc-update add lokad default 2>/dev/null
 
-  guestunmount "$MOUNT_DIR"
-else
-  # Fallback: use sudo mount (needs root).
-  sudo mount -o loop "$OUT" "$MOUNT_DIR"
-  sudo tar -xf "$TMP/rootfs.tar" -C "$MOUNT_DIR"
+# Network
+printf 'auto lo\niface lo inet loopback\nauto eth0\niface eth0 inet dhcp\n' | sudo tee "$MNT/etc/network/interfaces" > /dev/null
 
-  # Inject LOKA binaries.
-  for bin in lokad loka-worker loka-supervisor loka-vmagent; do
-    [ -f "$BIN_DIR/$bin" ] && sudo cp "$BIN_DIR/$bin" "$MOUNT_DIR/usr/local/bin/$bin"
-  done
-  sudo chmod +x "$MOUNT_DIR/usr/local/bin/"* 2>/dev/null || true
+# fstab + hostname
+echo '/dev/vda / ext4 defaults,discard 0 1' | sudo tee "$MNT/etc/fstab" > /dev/null
+echo 'loka' | sudo tee "$MNT/etc/hostname" > /dev/null
 
-  # Create vmagent init script.
-  cat <<'INITSCRIPT' | sudo tee "$MOUNT_DIR/etc/init.d/loka-vmagent" >/dev/null
-#!/sbin/openrc-run
-description="LOKA VM Agent"
-command="/usr/local/bin/loka-vmagent"
-command_background=true
-pidfile="/run/loka-vmagent.pid"
-output_log="/var/log/loka-vmagent.log"
-error_log="/var/log/loka-vmagent.log"
-INITSCRIPT
-  sudo chmod +x "$MOUNT_DIR/etc/init.d/loka-vmagent"
-  sudo chroot "$MOUNT_DIR" rc-update add loka-vmagent default
+# fstrim cron
+sudo mkdir -p "$MNT/etc/crontabs"
+echo '*/5 * * * * fstrim / 2>/dev/null' | sudo tee "$MNT/etc/crontabs/root" > /dev/null
 
-  sudo umount "$MOUNT_DIR"
-fi
+# Clean up resolv.conf (will be set by DHCP at boot)
+sudo rm -f "$MNT/etc/resolv.conf"
+
+sudo umount "$MNT"
+rmdir "$MNT"
+
+# ── Done ─────────────────────────────────────────────────
 
 ACTUAL=$(du -h "$OUT" | awk '{print $1}')
-echo "==> Done: $OUT (50GB virtual, ${ACTUAL} actual)"
+echo ""
+echo "==> Done"
+echo "    Rootfs: $OUT (50GB virtual, ${ACTUAL} actual)"
+echo "    Kernel: $KERNEL"
+echo ""
+echo "    Run: ./bin/lokavm --data-dir build/"

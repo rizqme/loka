@@ -1,5 +1,5 @@
 .PHONY: all build build-linux build-all proto clean test test-unit test-integration lint fmt help \
-       install uninstall fetch-firecracker build-rootfs setup-lima e2e-test lokavm
+       install uninstall fetch-firecracker build-vm-assets lokavm-full install-vm-assets e2e-test lokavm
 
 # Variables
 GO := go
@@ -92,24 +92,31 @@ test-integration:
 fetch-firecracker:
 	bash scripts/fetch-firecracker.sh
 
-# Build guest rootfs image (Linux + Docker required)
-build-rootfs: build-linux
-	bash scripts/build-rootfs.sh
+# Build VM rootfs + kernel (no Docker — just Alpine minirootfs + sudo mount)
+build-vm-assets:
+	bash scripts/build-rootfs.sh build/loka-rootfs.ext4
 
-# Setup Lima VM for macOS development
-setup-lima:
-	bash scripts/setup-lima.sh
+# Build everything for lokavm (macOS): CLI + lokavm + VM assets
+lokavm-full: $(LOKA_CLI) $(LOKA_VM) build-vm-assets
+	@echo ""
+	@echo "  lokavm ready!"
+	@echo "  Run: ./bin/lokavm --data-dir build/"
+
+# Install VM assets to ~/.loka/vm/
+install-vm-assets: build-vm-assets
+	@mkdir -p $(HOME)/.loka/vm
+	@cp build/vmlinux $(HOME)/.loka/vm/vmlinux
+	@cp build/loka-rootfs.ext4 $(HOME)/.loka/vm/rootfs.ext4
+	@echo "  VM assets installed to ~/.loka/vm/"
 
 # Install LOKA locally from source
 INSTALL_DIR ?= /usr/local/bin
 install: build
 ifeq ($(shell uname -s),Darwin)
+install: install-vm-assets
 	@echo "==> Installing LOKA (macOS)"
 	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
 	sudo install -m 755 $(LOKA_VM) $(INSTALL_DIR)/lokavm
-	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
-	sudo install -m 755 $(LOKA_WORKER) $(INSTALL_DIR)/loka-worker
-	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
 	@echo ""
 	@echo "  LOKA installed. Run: loka setup local"
 else
@@ -132,9 +139,6 @@ endif
 	-rm -rf $(HOME)/.loka
 	@echo "  ✓ LOKA uninstalled"
 
-# Build minimal Lima VM image — requires Docker
-lima-image:
-	bash scripts/build-lima-image.sh
 
 # Run E2E test suite
 e2e-test: build
@@ -160,11 +164,12 @@ help:
 	@echo "Targets:"
 	@echo "  build            Build all binaries for current platform"
 	@echo "  lokavm           Build lokavm binary (macOS only, VZ framework)"
-	@echo "  install          Build + install locally (lokavm on macOS)"
+	@echo "  lokavm-full      Build lokavm + VM assets (kernel + rootfs)"
+	@echo "  build-vm-assets  Build VM rootfs + download kernel (no Docker)"
+	@echo "  install          Build + install locally (lokavm + assets on macOS)"
 	@echo "  uninstall        Remove LOKA and all data"
-	@echo "  build-linux      Cross-compile all binaries for Linux amd64"
+	@echo "  build-linux      Cross-compile all binaries for Linux"
 	@echo "  build-all        Build for all platforms"
-	@echo "  lima-image        Build custom Lima ISO (~119MB)"
 	@echo "  e2e-test         Run E2E test suite"
 	@echo "  proto            Generate protobuf code"
 	@echo "  test             Run all tests (unit)"
