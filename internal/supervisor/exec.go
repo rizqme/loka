@@ -573,7 +573,19 @@ func (sp *ServiceProcess) startOnce() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
+	// Resolve binary path using the service PATH (Go's exec.LookPath
+	// uses the parent process's PATH, not Cmd.Env).
 	cmdPath := sp.command
+	if !filepath.IsAbs(cmdPath) {
+		servicePATH := "/env/bin:/usr/local/bin:/usr/bin:/bin"
+		for _, dir := range filepath.SplitList(servicePATH) {
+			candidate := filepath.Join(dir, cmdPath)
+			if _, err := os.Stat(candidate); err == nil {
+				cmdPath = candidate
+				break
+			}
+		}
+	}
 	osCmd := exec.CommandContext(sp.ctx, cmdPath, sp.args...)
 	if sp.workdir != "" {
 		osCmd.Dir = sp.workdir

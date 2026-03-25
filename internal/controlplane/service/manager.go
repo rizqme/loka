@@ -244,6 +244,12 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 	// 2. Send launch_service command to worker.
 	m.updateStatusMessage(ctx, serviceID, "launching")
 
+	// Default workdir to /workspace when deploying a bundle.
+	workdir := svc.Workdir
+	if workdir == "" && svc.BundleKey != "" {
+		workdir = "/workspace"
+	}
+
 	launchData := worker.LaunchServiceData{
 		ServiceID:  serviceID,
 		ImageRef:   svc.ImageRef,
@@ -253,7 +259,7 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 		Command:    svc.Command,
 		Args:       svc.Args,
 		Env:        svc.Env,
-		Workdir:    svc.Workdir,
+		Workdir:    workdir,
 		Port:       svc.Port,
 		BundleKey:  svc.BundleKey,
 		Mounts:     svc.Mounts,

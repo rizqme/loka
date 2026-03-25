@@ -552,8 +552,8 @@ func (a *Agent) extractBundle(ctx context.Context, vsock *vm.VsockClient, bundle
 	if execErr != nil {
 		return fmt.Errorf("mkdir in VM: %w", execErr)
 	}
-	if resp.Status != "completed" {
-		return fmt.Errorf("mkdir failed: %s", resp.Error)
+	if resp.Status != "success" {
+		return fmt.Errorf("mkdir failed (status=%s): %s", resp.Status, resp.Error)
 	}
 
 	// Re-open the temp file and stream chunks into the VM.
@@ -591,7 +591,7 @@ func (a *Agent) extractBundle(ctx context.Context, vsock *vm.VsockClient, bundle
 			if chunkErr != nil {
 				return fmt.Errorf("stream chunk to VM: %w", chunkErr)
 			}
-			if chunkResp.Status != "completed" {
+			if chunkResp.Status != "success" {
 				return fmt.Errorf("chunk transfer failed: %s", chunkResp.Error)
 			}
 		}
@@ -616,7 +616,7 @@ func (a *Agent) extractBundle(ctx context.Context, vsock *vm.VsockClient, bundle
 	if execErr != nil {
 		return fmt.Errorf("extract bundle in VM: %w", execErr)
 	}
-	if resp.Status != "completed" {
+	if resp.Status != "success" {
 		return fmt.Errorf("bundle extraction failed: %s", resp.Error)
 	}
 
@@ -772,10 +772,17 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 		return
 	}
 
-	// Read the RPC response.
-	var resp vm.RPCResponse
-	if err := json.NewDecoder(vsockConn).Decode(&resp); err != nil {
+	// Read the RPC response. Use raw read instead of json.Decoder to avoid
+	// buffering past the response boundary (the connection becomes raw TCP after).
+	respBuf := make([]byte, 4096)
+	n2, err := vsockConn.Read(respBuf)
+	if err != nil {
 		a.logger.Debug("port forward: read RPC response failed", "error", err)
+		return
+	}
+	var resp vm.RPCResponse
+	if err := json.Unmarshal(respBuf[:n2], &resp); err != nil {
+		a.logger.Debug("port forward: parse RPC response failed", "error", err, "raw", string(respBuf[:n2]))
 		return
 	}
 	if resp.Error != nil {
