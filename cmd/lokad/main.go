@@ -494,8 +494,12 @@ func main() {
 		localWorker.SetStore(db)
 		localWorker.Start(ctx)
 
-		// Wire up service log retrieval through the embedded agent.
+		// Wire up the VM manager so the image manager can create warm snapshots
+		// (boot temp VM, wait for supervisor, snapshot, upload).
 		agent := localWorker.Agent()
+		imgMgr.SetVMManager(agent.VMManager())
+
+		// Wire up service log retrieval through the embedded agent.
 		svcMgr.SetLogsFn(func(serviceID string, lines int) ([]string, []string, error) {
 			result, err := agent.ServiceLogs(serviceID, lines)
 			if err != nil {

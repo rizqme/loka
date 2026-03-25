@@ -305,6 +305,7 @@ func (m *Manager) Resume(id string) error {
 }
 
 // CreateSnapshot creates a full VM snapshot (memory + disk state).
+// The VM is paused before snapshotting and resumed afterwards.
 func (m *Manager) CreateSnapshot(id, memPath, snapPath string) error {
 	vm, ok := m.Get(id)
 	if !ok {
@@ -324,6 +325,34 @@ func (m *Manager) CreateSnapshot(id, memPath, snapPath string) error {
 
 	// Resume after snapshot.
 	return m.Resume(id)
+}
+
+// CreateDiffSnapshot pauses the VM, creates a diff snapshot (smaller than full),
+// and leaves the VM paused. The caller should Stop the VM afterwards.
+// Returns the paths to the memory and vmstate files written.
+func (m *Manager) CreateDiffSnapshot(id string) (memPath, statePath string, err error) {
+	vm, ok := m.Get(id)
+	if !ok {
+		return "", "", fmt.Errorf("VM %s not found", id)
+	}
+
+	vmDir := filepath.Dir(vm.SocketPath)
+	memPath = filepath.Join(vmDir, "snapshot_mem")
+	statePath = filepath.Join(vmDir, "snapshot_vmstate")
+
+	// Pause the VM.
+	if err := m.Pause(id); err != nil {
+		return "", "", fmt.Errorf("pause for diff snapshot: %w", err)
+	}
+
+	// Create diff snapshot.
+	body := fmt.Sprintf(`{"snapshot_type":"Diff","snapshot_path":"%s","mem_file_path":"%s"}`, statePath, memPath)
+	if err := firecrackerAPIPut(vm.SocketPath, "/snapshot/create", body); err != nil {
+		return "", "", fmt.Errorf("create diff snapshot: %w", err)
+	}
+
+	m.logger.Info("diff snapshot created", "id", id, "mem", memPath, "state", statePath)
+	return memPath, statePath, nil
 }
 
 // ── Firecracker Config Builder ──────────────────────────

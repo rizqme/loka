@@ -208,17 +208,19 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 		data := cmd.Data.(cpworker.LaunchServiceData)
 		go func() {
 			if err := lw.agent.LaunchService(ctx, data.ServiceID, worker.ServiceLaunchOpts{
-				ImageRef:      data.ImageRef,
-				VCPUs:         data.VCPUs,
-				MemoryMB:      data.MemoryMB,
-				RootfsPath:    data.RootfsPath,
-				Command:       data.Command,
-				Args:          data.Args,
-				Env:           data.Env,
-				Workdir:       data.Workdir,
-				Port:          data.Port,
-				BundleKey:     data.BundleKey,
-				RestartPolicy: data.RestartPolicy,
+				ImageRef:            data.ImageRef,
+				VCPUs:               data.VCPUs,
+				MemoryMB:            data.MemoryMB,
+				RootfsPath:          data.RootfsPath,
+				Command:             data.Command,
+				Args:                data.Args,
+				Env:                 data.Env,
+				Workdir:             data.Workdir,
+				Port:                data.Port,
+				BundleKey:           data.BundleKey,
+				RestartPolicy:       data.RestartPolicy,
+				SnapshotMemPath:     data.SnapshotMemPath,
+				SnapshotVMStatePath: data.SnapshotVMStatePath,
 			}); err != nil {
 				lw.logger.Error("failed to launch service", "service", data.ServiceID, "error", err)
 				return

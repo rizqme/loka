@@ -40,17 +40,19 @@ type Agent struct {
 
 // ServiceLaunchOpts holds options for launching a service VM.
 type ServiceLaunchOpts struct {
-	ImageRef      string
-	VCPUs         int
-	MemoryMB      int
-	RootfsPath    string
-	Command       string
-	Args          []string
-	Env           map[string]string
-	Workdir       string
-	Port          int
-	BundleKey     string
-	RestartPolicy string
+	ImageRef            string
+	VCPUs               int
+	MemoryMB            int
+	RootfsPath          string
+	Command             string
+	Args                []string
+	Env                 map[string]string
+	Workdir             string
+	Port                int
+	BundleKey           string
+	RestartPolicy       string
+	SnapshotMemPath     string // Warm snapshot memory file for instant restore.
+	SnapshotVMStatePath string // Warm snapshot VM state file.
 }
 
 // SessionState tracks a running session backed by a Firecracker microVM.
@@ -95,6 +97,10 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 
 // ID returns the agent's unique identifier.
 func (a *Agent) ID() string { return a.id }
+
+// VMManager returns the underlying VM manager, allowing callers to use it
+// for warm snapshot creation (e.g., the image manager in local mode).
+func (a *Agent) VMManager() *vm.Manager { return a.vmManager }
 
 // SetID sets the agent ID (from registration response).
 func (a *Agent) SetID(id string) { a.id = id }
@@ -427,12 +433,15 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		mem = 512
 	}
 
-	// Launch Firecracker microVM.
+	// Launch Firecracker microVM — uses warm snapshot if available (~28ms),
+	// otherwise cold boots (~1-2s).
 	microVM, err := a.vmManager.Launch(ctx, serviceID, vm.VMConfig{
-		VCPU:       vcpu,
-		MemoryMB:   mem,
-		RootfsPath: opts.RootfsPath,
-		OverlayDir: a.overlay.SessionDir(serviceID),
+		VCPU:                vcpu,
+		MemoryMB:            mem,
+		RootfsPath:          opts.RootfsPath,
+		OverlayDir:          a.overlay.SessionDir(serviceID),
+		SnapshotMemPath:     opts.SnapshotMemPath,
+		SnapshotVMStatePath: opts.SnapshotVMStatePath,
 	})
 	if err != nil {
 		return fmt.Errorf("launch VM: %w", err)

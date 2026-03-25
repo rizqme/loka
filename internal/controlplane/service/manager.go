@@ -250,19 +250,35 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 		workdir = "/workspace"
 	}
 
+	// Resolve warm snapshot paths if the image has them.
+	// Downloads and decompresses from objstore on cache miss.
+	var snapshotMemPath, snapshotVMStatePath string
+	if svc.ImageID != "" && m.images != nil {
+		memPath, statePath, snapErr := m.images.ResolveSnapshotPaths(ctx, svc.ImageID)
+		if snapErr != nil {
+			m.logger.Warn("resolve snapshot paths failed, will cold boot",
+				"service", serviceID, "error", snapErr)
+		} else {
+			snapshotMemPath = memPath
+			snapshotVMStatePath = statePath
+		}
+	}
+
 	launchData := worker.LaunchServiceData{
-		ServiceID:  serviceID,
-		ImageRef:   svc.ImageRef,
-		VCPUs:      svc.VCPUs,
-		MemoryMB:   svc.MemoryMB,
-		RootfsPath: rootfsPath,
-		Command:    svc.Command,
-		Args:       svc.Args,
-		Env:        svc.Env,
-		Workdir:    workdir,
-		Port:       svc.Port,
-		BundleKey:  svc.BundleKey,
-		Mounts:     svc.Mounts,
+		ServiceID:           serviceID,
+		ImageRef:            svc.ImageRef,
+		VCPUs:               svc.VCPUs,
+		MemoryMB:            svc.MemoryMB,
+		RootfsPath:          rootfsPath,
+		Command:             svc.Command,
+		Args:                svc.Args,
+		Env:                 svc.Env,
+		Workdir:             workdir,
+		Port:                svc.Port,
+		BundleKey:           svc.BundleKey,
+		Mounts:              svc.Mounts,
+		SnapshotMemPath:     snapshotMemPath,
+		SnapshotVMStatePath: snapshotVMStatePath,
 	}
 
 	m.registry.SendCommand(svc.WorkerID, worker.WorkerCommand{

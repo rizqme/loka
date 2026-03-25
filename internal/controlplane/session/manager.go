@@ -138,8 +138,14 @@ func (m *Manager) Create(ctx context.Context, opts CreateOpts) (*loka.Session, e
 				} else {
 					launchData.RootfsPath = rootfs
 				}
-				launchData.SnapshotMemPath = img.SnapshotMem
-				launchData.SnapshotVMStatePath = img.SnapshotVMState
+				// Resolve warm snapshot to local paths (downloads + decompresses on cache miss).
+				memPath, statePath, snapErr := m.images.ResolveSnapshotPaths(ctx, img.ID)
+				if snapErr != nil {
+					m.logger.Warn("resolve snapshot paths failed, will cold boot", "image", img.ID, "error", snapErr)
+				} else {
+					launchData.SnapshotMemPath = memPath
+					launchData.SnapshotVMStatePath = statePath
+				}
 				imageReady = true
 			}
 		}
@@ -191,8 +197,14 @@ func (m *Manager) Create(ctx context.Context, opts CreateOpts) (*loka.Session, e
 				}
 				ld := launchData // copy the struct
 				ld.RootfsPath = rootfs
-				ld.SnapshotMemPath = img.SnapshotMem
-				ld.SnapshotVMStatePath = img.SnapshotVMState
+				// Resolve warm snapshot to local paths (downloads + decompresses on cache miss).
+				snapMem, snapState, snapErr := m.images.ResolveSnapshotPaths(pullCtx, img.ID)
+				if snapErr != nil {
+					m.logger.Warn("resolve snapshot paths failed, will cold boot", "session", sessionID, "error", snapErr)
+				} else {
+					ld.SnapshotMemPath = snapMem
+					ld.SnapshotVMStatePath = snapState
+				}
 
 				m.UpdateStatusMessage(pullCtx, sessionID, "booting")
 

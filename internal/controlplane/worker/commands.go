@@ -62,19 +62,21 @@ type SyncMountData struct {
 
 // LaunchServiceData is the payload for launching a service on a worker.
 type LaunchServiceData struct {
-	ServiceID     string
-	ImageRef      string
-	VCPUs         int
-	MemoryMB      int
-	RootfsPath    string
-	Command       string
-	Args          []string
-	Env           map[string]string
-	Workdir       string
-	Port          int
-	BundleKey     string
-	RestartPolicy string
-	Mounts        []loka.VolumeMount
+	ServiceID           string
+	ImageRef            string
+	VCPUs               int
+	MemoryMB            int
+	RootfsPath          string
+	Command             string
+	Args                []string
+	Env                 map[string]string
+	Workdir             string
+	Port                int
+	BundleKey           string
+	RestartPolicy       string
+	Mounts              []loka.VolumeMount
+	SnapshotMemPath     string // Warm snapshot memory file for instant restore.
+	SnapshotVMStatePath string // Warm snapshot VM state file.
 }
 
 // StopServiceData is the payload for stopping a service on a worker.
