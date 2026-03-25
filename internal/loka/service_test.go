@@ -32,7 +32,7 @@ func TestServiceCanTransitionTo(t *testing.T) {
 		{ServiceStatusIdle, ServiceStatusRunning, false},
 		{ServiceStatusStopped, ServiceStatusRunning, false},
 		{ServiceStatusDeploying, ServiceStatusIdle, false},
-		{ServiceStatusDeploying, ServiceStatusStopped, false},
+		{ServiceStatusDeploying, ServiceStatusStopped, true},
 		{ServiceStatusDeploying, ServiceStatusWaking, false},
 		{ServiceStatusWaking, ServiceStatusIdle, false},
 		{ServiceStatusWaking, ServiceStatusStopped, false},
@@ -76,10 +76,9 @@ func TestServiceCanTransitionTo_ExhaustiveInvalid(t *testing.T) {
 		from ServiceStatus
 		to   ServiceStatus
 	}{
-		// deploying: cannot go to idle, waking, stopped directly
+		// deploying: cannot go to idle or waking directly
 		{ServiceStatusDeploying, ServiceStatusIdle},
 		{ServiceStatusDeploying, ServiceStatusWaking},
-		{ServiceStatusDeploying, ServiceStatusStopped},
 		// running: cannot go back to deploying or waking
 		{ServiceStatusRunning, ServiceStatusDeploying},
 		{ServiceStatusRunning, ServiceStatusWaking},

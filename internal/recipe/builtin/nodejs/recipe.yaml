@@ -1,14 +1,17 @@
 name: nodejs
 version: "1.0"
-description: Node.js application
+description: Node.js / Bun application
 before: [static]
-image: node:20-slim
+image: "{{image}}"
 port: 3000
 build:
-  - npm install
+  - "{{pm_install}}"
 include:
   - package.json
   - package-lock.json
+  - yarn.lock
+  - pnpm-lock.yaml
+  - bun.lockb
   - node_modules/
   - dist/
   - build/
@@ -16,7 +19,7 @@ include:
   - index.js
   - server.js
   - app.js
-start: npm start
+start: "{{pm_start}}"
 health:
   path: /
   interval: 10

@@ -20,7 +20,6 @@ func TestLoadBuiltin(t *testing.T) {
 	}{
 		{name: "nextjs", wantPort: true, wantImage: true, wantBuild: true, wantStart: true, wantMatch: true},
 		{name: "vite", wantPort: true, wantImage: true, wantBuild: true, wantStart: true, wantMatch: true},
-		{name: "bun", wantPort: true, wantImage: true, wantBuild: true, wantStart: true, wantMatch: true},
 		{name: "nodejs", wantPort: true, wantImage: true, wantBuild: true, wantStart: true, wantMatch: true},
 		{name: "python", wantPort: true, wantImage: true, wantStart: true, wantMatch: true},
 		{name: "go", wantPort: true, wantImage: true, wantBuild: true, wantStart: true, wantMatch: true},
@@ -62,13 +61,13 @@ func TestLoadBuiltinNotFound(t *testing.T) {
 func TestListAll(t *testing.T) {
 	recipes, err := ListAll()
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, len(recipes), 7)
+	assert.GreaterOrEqual(t, len(recipes), 6)
 
 	names := make(map[string]bool)
 	for _, r := range recipes {
 		names[r.Name] = true
 	}
-	for _, expected := range []string{"nextjs", "vite", "bun", "nodejs", "python", "go", "static"} {
+	for _, expected := range []string{"nextjs", "vite", "nodejs", "python", "go", "static"} {
 		assert.True(t, names[expected], "expected built-in recipe %q", expected)
 	}
 }

@@ -31,6 +31,8 @@ func Match(projectDir string) (*Recipe, error) {
 
 		if val != nil && val.ToBoolean() {
 			slog.Info("recipe matched", "name", r.Name, "project", projectDir)
+			// Resolve {{var}} templates set by the match script.
+			r.ResolveVars()
 			return r, nil
 		}
 	}

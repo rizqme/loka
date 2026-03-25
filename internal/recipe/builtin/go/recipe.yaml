@@ -4,10 +4,10 @@ description: Go application
 image: golang:1.23-alpine
 port: 8080
 build:
-  - go build -o app .
+  - "go build -o {{binary}} ."
 include:
-  - app
-start: ./app
+  - "{{binary}}"
+start: "./{{binary}}"
 health:
   path: /
   interval: 10

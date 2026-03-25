@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -140,6 +141,51 @@ func (c *RecipeContext) SetStartCommand(cmd string) {
 	c.recipe.Start = cmd
 }
 
+// SetVar sets a template variable that can be used as {{name}} in build/start commands.
+func (c *RecipeContext) SetVar(key, value string) {
+	if c.recipe.Vars == nil {
+		c.recipe.Vars = make(map[string]string)
+	}
+	c.recipe.Vars[key] = value
+}
+
+// GetVar returns a template variable, or empty string if not set.
+func (c *RecipeContext) GetVar(key string) string {
+	if c.recipe.Vars == nil {
+		return ""
+	}
+	return c.recipe.Vars[key]
+}
+
+// CommandExists checks if a command is available on the host PATH.
+func (c *RecipeContext) CommandExists(name string) bool {
+	_, err := exec.LookPath(name)
+	return err == nil
+}
+
+// Which returns the full path of a command, or empty string if not found.
+func (c *RecipeContext) Which(name string) string {
+	path, err := exec.LookPath(name)
+	if err != nil {
+		return ""
+	}
+	return path
+}
+
+// HasScript checks if a package.json script exists (e.g. "build", "start").
+func (c *RecipeContext) HasScript(name string) bool {
+	pkg := c.ReadJSON("package.json")
+	if pkg == nil {
+		return false
+	}
+	scripts, ok := pkg["scripts"].(map[string]interface{})
+	if !ok {
+		return false
+	}
+	_, exists := scripts[name]
+	return exists
+}
+
 // RunScript executes a JS script in the goja runtime with the recipe context
 // functions available as globals. Returns the script's return value.
 func (c *RecipeContext) RunScript(script string) (goja.Value, error) {
@@ -156,6 +202,11 @@ func (c *RecipeContext) RunScript(script string) (goja.Value, error) {
 	vm.Set("SetImage", c.SetImage)
 	vm.Set("SetBuildCommand", c.SetBuildCommand)
 	vm.Set("SetStartCommand", c.SetStartCommand)
+	vm.Set("SetVar", c.SetVar)
+	vm.Set("GetVar", c.GetVar)
+	vm.Set("CommandExists", c.CommandExists)
+	vm.Set("Which", c.Which)
+	vm.Set("HasScript", c.HasScript)
 
 	val, err := vm.RunString(script)
 	if err != nil {

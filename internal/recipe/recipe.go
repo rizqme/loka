@@ -29,10 +29,38 @@ type Recipe struct {
 	Health      HealthConfig      `yaml:"health"`
 	Env         map[string]string `yaml:"env"`
 
+	// Vars holds template variables set by match/configure scripts.
+	// Used as {{var_name}} in Build, Start, Include, Image, and Env values.
+	Vars map[string]string `yaml:"-"`
+
 	// matchScript holds the JS match script content (not serialized).
 	matchScript string
 	// source indicates where the recipe was loaded from.
 	source string
+}
+
+// ResolveVars expands all {{var}} templates in Build, Start, Include, Image, and Env.
+func (r *Recipe) ResolveVars() {
+	if len(r.Vars) == 0 {
+		return
+	}
+	expand := func(s string) string {
+		for k, v := range r.Vars {
+			s = strings.ReplaceAll(s, "{{"+k+"}}", v)
+		}
+		return s
+	}
+	r.Image = expand(r.Image)
+	r.Start = expand(r.Start)
+	for i, cmd := range r.Build {
+		r.Build[i] = expand(cmd)
+	}
+	for i, inc := range r.Include {
+		r.Include[i] = expand(inc)
+	}
+	for k, v := range r.Env {
+		r.Env[k] = expand(v)
+	}
 }
 
 // HealthConfig defines health check parameters.
