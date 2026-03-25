@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -105,6 +107,13 @@ func (s *Server) handleConnection(conn net.Conn) {
 		s.logger.Error("decode request", "error", err)
 		errResp := vm.RPCResponse{Error: &vm.RPCError{Code: -1, Message: fmt.Sprintf("invalid request: %v", err)}}
 		encoder.Encode(errResp)
+		return
+	}
+
+	// tcp_forward is special: after the RPC response the connection becomes
+	// a raw TCP tunnel, so we handle it here instead of in handleRPC.
+	if req.Method == "tcp_forward" {
+		s.handleTCPForward(conn, encoder, req)
 		return
 	}
 
@@ -278,6 +287,64 @@ func (s *Server) handleExec(req vm.RPCRequest) vm.RPCResponse {
 
 	result, _ := json.Marshal(vm.ExecResponse{Status: status, Results: results})
 	return vm.RPCResponse{ID: req.ID, Result: result}
+}
+
+// handleTCPForward connects to localhost:port inside the VM and relays data
+// bidirectionally over the vsock connection. After the success response, the
+// vsock connection becomes a raw TCP tunnel — no more JSON-RPC on it.
+func (s *Server) handleTCPForward(conn net.Conn, encoder *json.Encoder, req vm.RPCRequest) {
+	var params struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("invalid params: %w", err)))
+		return
+	}
+	if params.Port <= 0 || params.Port > 65535 {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("invalid port: %d", params.Port)))
+		return
+	}
+
+	// Connect to the target service running inside the VM.
+	targetAddr := fmt.Sprintf("127.0.0.1:%d", params.Port)
+	targetConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+	if err != nil {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("connect to %s: %w", targetAddr, err)))
+		return
+	}
+
+	// Send success response. After this, the connection is a raw TCP tunnel.
+	encoder.Encode(vm.RPCResponse{ID: req.ID, Result: jsonRaw(`"ok"`)})
+
+	// Clear deadlines — the tunnel can live as long as the TCP connection.
+	conn.SetDeadline(time.Time{})
+	targetConn.SetDeadline(time.Time{})
+
+	s.logger.Info("tcp_forward tunnel established", "port", params.Port)
+
+	// Bidirectional relay.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(targetConn, conn)
+		// When the vsock side closes, half-close the target side.
+		if tc, ok := targetConn.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(conn, targetConn)
+		// When the target side closes, half-close the vsock side.
+		if tc, ok := conn.(*net.TCPConn); ok {
+			tc.CloseWrite()
+		}
+	}()
+	wg.Wait()
+
+	targetConn.Close()
+	// conn is closed by the deferred Close in handleConnection.
 }
 
 func jsonRaw(s string) json.RawMessage {

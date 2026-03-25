@@ -41,7 +41,15 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// Incremental migrations for columns added after the initial schema.
+	for _, m := range migrations {
+		s.db.ExecContext(ctx, m) // Ignore errors (column may already exist).
+	}
 	return nil
+}
+
+var migrations = []string{
+	`ALTER TABLE services ADD COLUMN IF NOT EXISTS forward_port INTEGER NOT NULL DEFAULT 0`,
 }
 
 func (s *Store) Close() error {

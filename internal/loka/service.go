@@ -70,6 +70,7 @@ type Service struct {
 	Mounts         []VolumeMount
 	Autoscale      *AutoscaleConfig
 	SnapshotID     string
+	ForwardPort    int // Local TCP port that tunnels to VM service port via vsock.
 	Ready          bool
 	StatusMessage  string
 	LastActivity   time.Time

@@ -3,9 +3,11 @@ package worker
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"runtime"
 	"strings"
@@ -58,6 +60,10 @@ type SessionState struct {
 	VM       *vm.MicroVM     // Firecracker VM instance.
 	Vsock    *vm.VsockClient // vsock connection to supervisor inside VM.
 	LayerMap map[string]string
+
+	// Port forwarding: local TCP listener that tunnels to VM via vsock.
+	PortForwardListener net.Listener
+	ForwardedPort       int // Local port assigned to the port forward listener.
 }
 
 // NewAgent creates a new worker agent with Firecracker VM management.
@@ -198,10 +204,14 @@ func (a *Agent) WorkspacePath(sessionID string) string {
 // StopSession stops the microVM and cleans up.
 func (a *Agent) StopSession(sessionID string) error {
 	a.mu.Lock()
-	_, ok := a.sessions[sessionID]
+	sess, ok := a.sessions[sessionID]
 	if !ok {
 		a.mu.Unlock()
 		return fmt.Errorf("session %s not found", sessionID)
+	}
+	// Close port forward listener if active.
+	if sess.PortForwardListener != nil {
+		sess.PortForwardListener.Close()
 	}
 	delete(a.sessions, sessionID)
 	a.mu.Unlock()
@@ -467,6 +477,24 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 	}
 	a.mu.Unlock()
 
+	// Start port forwarding so the domain proxy can reach the service
+	// inside the VM via a local TCP port tunnelled through vsock.
+	if opts.Port > 0 {
+		localPort, err := a.StartPortForward(serviceID, opts.Port)
+		if err != nil {
+			a.logger.Warn("port forward failed, service still running",
+				"service", serviceID, "error", err)
+		} else {
+			a.logger.Info("service launched with Firecracker VM",
+				"service", serviceID,
+				"vm_pid", microVM.PID,
+				"command", opts.Command,
+				"forward_port", localPort,
+			)
+			return nil
+		}
+	}
+
 	a.logger.Info("service launched with Firecracker VM",
 		"service", serviceID,
 		"vm_pid", microVM.PID,
@@ -618,7 +646,8 @@ func (a *Agent) StartService(ctx context.Context, sessionID string, command stri
 	return nil
 }
 
-// StopService stops the running service process inside the session's VM.
+// StopService stops the running service process inside the session's VM
+// and closes the port forward listener if one is active.
 func (a *Agent) StopService(sessionID string) error {
 	a.mu.RLock()
 	sess, ok := a.sessions[sessionID]
@@ -626,6 +655,9 @@ func (a *Agent) StopService(sessionID string) error {
 	if !ok {
 		return fmt.Errorf("session %s not found", sessionID)
 	}
+
+	// Close port forward listener before stopping the service.
+	a.StopPortForward(sessionID)
 
 	if err := sess.Vsock.ServiceStop("SIGTERM", 10); err != nil {
 		return fmt.Errorf("stop service via vsock: %w", err)
@@ -657,6 +689,139 @@ func (a *Agent) ServiceLogs(sessionID string, lines int) (*vm.ServiceLogsResult,
 	}
 
 	return sess.Vsock.ServiceLogs(lines)
+}
+
+// ── Port Forwarding (vsock TCP tunnel) ──────────────────
+
+// StartPortForward starts a local TCP listener that tunnels connections
+// through vsock to the supervisor inside the VM, which then connects to
+// localhost:vmPort. Returns the local port assigned to the listener.
+func (a *Agent) StartPortForward(sessionID string, vmPort int) (int, error) {
+	a.mu.Lock()
+	sess, ok := a.sessions[sessionID]
+	a.mu.Unlock()
+	if !ok {
+		return 0, fmt.Errorf("session %s not found", sessionID)
+	}
+
+	// Listen on a random available port.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, fmt.Errorf("listen for port forward: %w", err)
+	}
+
+	localPort := listener.Addr().(*net.TCPAddr).Port
+
+	a.mu.Lock()
+	sess.PortForwardListener = listener
+	sess.ForwardedPort = localPort
+	a.mu.Unlock()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return // Listener closed.
+			}
+			go a.forwardConnection(conn, sess, vmPort)
+		}
+	}()
+
+	a.logger.Info("port forward started",
+		"session", sessionID,
+		"local_port", localPort,
+		"vm_port", vmPort,
+	)
+	return localPort, nil
+}
+
+// forwardConnection tunnels a single TCP connection through vsock to the VM.
+// It opens a new vsock connection, sends a tcp_forward RPC to the supervisor,
+// and then relays data bidirectionally.
+func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPort int) {
+	defer clientConn.Close()
+
+	// Open a new vsock connection to the supervisor.
+	vsockConn, err := net.DialTimeout("unix", sess.Vsock.SocketPath(), 5*time.Second)
+	if err != nil {
+		a.logger.Debug("port forward: vsock dial failed", "error", err)
+		return
+	}
+	defer vsockConn.Close()
+
+	// Firecracker vsock handshake: CONNECT to port 52 (supervisor).
+	if _, err := fmt.Fprintf(vsockConn, "CONNECT 52\n"); err != nil {
+		a.logger.Debug("port forward: vsock CONNECT failed", "error", err)
+		return
+	}
+	buf := make([]byte, 32)
+	n, err := vsockConn.Read(buf)
+	if err != nil || n < 2 || string(buf[:2]) != "OK" {
+		a.logger.Debug("port forward: vsock handshake failed")
+		return
+	}
+
+	// Send tcp_forward RPC. After the response, the connection becomes raw TCP.
+	req := vm.RPCRequest{
+		Method: "tcp_forward",
+		ID:     "fwd",
+		Params: json.RawMessage(fmt.Sprintf(`{"port":%d}`, vmPort)),
+	}
+	if err := json.NewEncoder(vsockConn).Encode(req); err != nil {
+		a.logger.Debug("port forward: send RPC failed", "error", err)
+		return
+	}
+
+	// Read the RPC response.
+	var resp vm.RPCResponse
+	if err := json.NewDecoder(vsockConn).Decode(&resp); err != nil {
+		a.logger.Debug("port forward: read RPC response failed", "error", err)
+		return
+	}
+	if resp.Error != nil {
+		a.logger.Debug("port forward: supervisor error", "error", resp.Error.Message)
+		return
+	}
+
+	// Connection is now a raw TCP tunnel. Bidirectional copy.
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		io.Copy(vsockConn, clientConn)
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(clientConn, vsockConn)
+	}()
+	wg.Wait()
+}
+
+// StopPortForward closes the port forward listener for a session.
+func (a *Agent) StopPortForward(sessionID string) {
+	a.mu.Lock()
+	sess, ok := a.sessions[sessionID]
+	a.mu.Unlock()
+	if !ok {
+		return
+	}
+	if sess.PortForwardListener != nil {
+		sess.PortForwardListener.Close()
+		sess.PortForwardListener = nil
+		sess.ForwardedPort = 0
+		a.logger.Info("port forward stopped", "session", sessionID)
+	}
+}
+
+// GetForwardedPort returns the local forwarded port for a session, or 0 if none.
+func (a *Agent) GetForwardedPort(sessionID string) int {
+	a.mu.RLock()
+	sess, ok := a.sessions[sessionID]
+	a.mu.RUnlock()
+	if !ok {
+		return 0
+	}
+	return sess.ForwardedPort
 }
 
 // SessionCount returns the number of active sessions.

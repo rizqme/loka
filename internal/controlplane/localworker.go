@@ -9,6 +9,7 @@ import (
 	cpworker "github.com/vyprai/loka/internal/controlplane/worker"
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/objstore"
+	"github.com/vyprai/loka/internal/store"
 	"github.com/vyprai/loka/internal/worker"
 	"github.com/vyprai/loka/internal/worker/vm"
 )
@@ -20,6 +21,7 @@ type LocalWorker struct {
 	workerConn     *cpworker.WorkerConn
 	registry       *cpworker.Registry
 	sessionManager *session.Manager
+	store          store.Store // For updating service records (e.g., ForwardPort).
 	logger         *slog.Logger
 }
 
@@ -57,6 +59,11 @@ func NewLocalWorker(registry *cpworker.Registry, sm *session.Manager, objStore o
 // agent-level methods such as ServiceLogs.
 func (lw *LocalWorker) Agent() *worker.Agent {
 	return lw.agent
+}
+
+// SetStore sets the store used to update service records (e.g., ForwardPort).
+func (lw *LocalWorker) SetStore(s store.Store) {
+	lw.store = s
 }
 
 // Start begins processing commands and sending heartbeats.
@@ -214,6 +221,24 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 				RestartPolicy: data.RestartPolicy,
 			}); err != nil {
 				lw.logger.Error("failed to launch service", "service", data.ServiceID, "error", err)
+				return
+			}
+			// Persist the forwarded port so the domain proxy can route to it.
+			if fwdPort := lw.agent.GetForwardedPort(data.ServiceID); fwdPort > 0 && lw.store != nil {
+				svc, err := lw.store.Services().Get(ctx, data.ServiceID)
+				if err != nil {
+					lw.logger.Warn("failed to get service for forward port update",
+						"service", data.ServiceID, "error", err)
+				} else {
+					svc.ForwardPort = fwdPort
+					if err := lw.store.Services().Update(ctx, svc); err != nil {
+						lw.logger.Warn("failed to persist forward port",
+							"service", data.ServiceID, "error", err)
+					} else {
+						lw.logger.Info("service forward port persisted",
+							"service", data.ServiceID, "forward_port", fwdPort)
+					}
+				}
 			}
 		}()
 

@@ -456,6 +456,7 @@ func main() {
 			logger.Error("failed to create local worker", "error", err)
 			os.Exit(1)
 		}
+		localWorker.SetStore(db)
 		localWorker.Start(ctx)
 
 		// Wire up service log retrieval through the embedded agent.

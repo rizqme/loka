@@ -29,6 +29,12 @@ func NewVsockClient(vsockPath string) *VsockClient {
 	}
 }
 
+// SocketPath returns the underlying vsock UDS path, allowing callers to
+// establish raw connections for operations like TCP port forwarding.
+func (c *VsockClient) SocketPath() string {
+	return c.socketPath
+}
+
 // ── RPC Messages ────────────────────────────────────────
 
 // RPCRequest is sent from the worker (host) to the supervisor (guest).

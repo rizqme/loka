@@ -272,8 +272,14 @@ func (p *DomainProxy) handleServiceRoute(w http.ResponseWriter, r *http.Request,
 		p.logger.Warn("failed to touch service", "service", route.ServiceID, "error", err)
 	}
 
-	// Proxy the request.
-	targetAddr := fmt.Sprintf("%s:%d", wc.Worker.IPAddress, route.RemotePort)
+	// Use the vsock-tunnelled forward port if available (Firecracker VMs
+	// have no TAP interface). Otherwise fall back to direct worker IP.
+	var targetAddr string
+	if svc.ForwardPort > 0 {
+		targetAddr = fmt.Sprintf("127.0.0.1:%d", svc.ForwardPort)
+	} else {
+		targetAddr = fmt.Sprintf("%s:%d", wc.Worker.IPAddress, route.RemotePort)
+	}
 	p.proxyHTTP(w, r, targetAddr, route, coldStart)
 }
 

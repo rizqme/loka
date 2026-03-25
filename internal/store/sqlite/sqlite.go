@@ -50,7 +50,18 @@ func (s *Store) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
+	// Incremental migrations for existing databases.
+	for _, m := range migrations {
+		s.db.ExecContext(ctx, m) // Ignore errors (column may already exist).
+	}
 	return nil
+}
+
+// migrations contains ALTER TABLE statements for columns added after the
+// initial schema. Each statement is idempotent — SQLite returns an error
+// if the column already exists, which we silently ignore.
+var migrations = []string{
+	`ALTER TABLE services ADD COLUMN forward_port INTEGER NOT NULL DEFAULT 0`,
 }
 
 // DB returns the underlying sql.DB for operations that need direct access
@@ -161,6 +172,7 @@ CREATE TABLE IF NOT EXISTS services (
 	mounts           TEXT NOT NULL DEFAULT '[]',
 	autoscale        TEXT NOT NULL DEFAULT 'null',
 	snapshot_id      TEXT NOT NULL DEFAULT '',
+	forward_port     INTEGER NOT NULL DEFAULT 0,
 	ready            INTEGER NOT NULL DEFAULT 0,
 	status_message   TEXT NOT NULL DEFAULT '',
 	last_activity    TEXT NOT NULL DEFAULT (datetime('now')),
