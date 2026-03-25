@@ -139,9 +139,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 	// Get or create VM manager via the VMManager interface.
 	mgr, err := vm.NewManager("loka")
 	if err != nil {
-		// VMManager creation failed (e.g., limactl not found).
-		// Fall back to direct Lima check for a helpful error message.
-		return fmt.Errorf("VM manager not available: %w\nInstall Lima first:\n  curl -fsSL https://vyprai.github.io/loka/install.sh | bash", err)
+		return fmt.Errorf("VM manager not available: %w\nInstall LOKA first:\n  curl -fsSL https://vyprai.github.io/loka/install.sh | bash", err)
 	}
 
 	// Ensure the VM exists and is running.
@@ -262,7 +260,6 @@ func deployLocalMacOS(name string, foreground bool) error {
 		saveDeployments(store)
 
 		// Run lokad in foreground via the VM manager.
-		// We need to use the underlying limactl for interactive I/O.
 		return execVMForeground(mgr, "sudo", "lokad")
 	}
 
@@ -338,22 +335,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 }
 
 // execVMForeground runs a command inside the VM with interactive I/O.
-// It attempts to use the underlying Lima shell for proper TTY passthrough.
 func execVMForeground(mgr vm.VMManager, cmd string, args ...string) error {
-	// Try limactl shell for interactive mode.
-	limactl, err := exec.LookPath("limactl")
-	if err == nil {
-		shellArgs := []string{"shell", mgr.Name(), "--"}
-		shellArgs = append(shellArgs, cmd)
-		shellArgs = append(shellArgs, args...)
-		p := exec.Command(limactl, shellArgs...)
-		p.Stdout = os.Stdout
-		p.Stderr = os.Stderr
-		p.Stdin = os.Stdin
-		return p.Run()
-	}
-
-	// Fallback: use Exec (no TTY passthrough).
 	allArgs := append([]string{cmd}, args...)
 	out, execErr := mgr.Exec(allArgs[0], allArgs[1:]...)
 	if out != "" {
@@ -413,23 +395,20 @@ func newDeployDownCmd() *cobra.Command {
 				if d.Meta != nil {
 					rt = d.Meta["runtime"]
 				}
-				if rt == "lima" || rt == "vm" {
-					// Stop lokad inside VM — keep the VM running for fast restart.
+				if rt == "vm" {
 					mgr, mgrErr := vm.NewManager("loka")
 					if mgrErr == nil {
 						mgr.Exec("sudo", "pkill", "-f", "lokad")
-						fmt.Printf("LOKA %q stopped\n", name)
-					} else {
-						// Fall back to limactl directly.
-						limactl, _ := exec.LookPath("limactl")
-						if limactl != "" {
-							exec.Command(limactl, "shell", "loka", "sudo", "pkill", "-f", "lokad").Run()
-							fmt.Printf("LOKA %q stopped\n", name)
-						}
 					}
+					fmt.Printf("LOKA %q stopped\n", name)
 				} else {
 					out, _ := exec.Command("pgrep", "-f", "lokad").Output()
-					if len(out) > 0 { exec.Command("kill", strings.TrimSpace(string(out))).Run(); fmt.Printf("LOKA %q stopped\n", name) } else { fmt.Printf("%q is not running\n", name) }
+					if len(out) > 0 {
+						exec.Command("kill", strings.TrimSpace(string(out))).Run()
+						fmt.Printf("LOKA %q stopped\n", name)
+					} else {
+						fmt.Printf("%q is not running\n", name)
+					}
 				}
 			}
 			d.Status = "stopped"; saveDeployments(store)

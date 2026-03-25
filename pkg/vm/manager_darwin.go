@@ -3,5 +3,5 @@
 package vm
 
 func NewManager(name string) (VMManager, error) {
-	return NewLimaManager(name)
+	return NewVZManager(name), nil
 }

@@ -44,6 +44,6 @@ const (
 )
 
 // NewManager creates the appropriate VMManager for the current platform.
-// On macOS: returns LimaManager (wraps limactl).
+// On macOS: returns VZManager (Apple Virtualization Framework).
 // On Linux: returns DirectManager (no VM needed).
 // Implemented in manager_darwin.go and manager_linux.go.
