@@ -79,7 +79,7 @@ type Service struct {
 
 // ValidServiceTransitions defines the allowed state transitions for a service.
 var ValidServiceTransitions = map[ServiceStatus][]ServiceStatus{
-	ServiceStatusDeploying: {ServiceStatusRunning, ServiceStatusError},
+	ServiceStatusDeploying: {ServiceStatusRunning, ServiceStatusStopped, ServiceStatusError},
 	ServiceStatusRunning:   {ServiceStatusIdle, ServiceStatusStopped, ServiceStatusError},
 	ServiceStatusIdle:      {ServiceStatusWaking, ServiceStatusStopped, ServiceStatusError},
 	ServiceStatusWaking:    {ServiceStatusRunning, ServiceStatusError},

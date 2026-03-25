@@ -174,6 +174,12 @@ CREATE INDEX IF NOT EXISTS idx_services_status_updated ON services(status, updat
 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 CREATE INDEX IF NOT EXISTS idx_sessions_worker ON sessions(worker_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_status_updated ON sessions(status, updated_at);
+-- Deduplicate session names before adding unique constraint.
+-- Append short ID suffix to duplicate non-empty names.
+UPDATE sessions SET name = name || '-' || substr(id, 1, 4)
+  WHERE name != '' AND rowid NOT IN (
+    SELECT min(rowid) FROM sessions WHERE name != '' GROUP BY name
+  );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_sessions_name ON sessions(name) WHERE name != '';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_services_name ON services(name) WHERE name != '';

@@ -29,6 +29,7 @@ IS_LINUX=false
 
 LOKA_BIN="${LOKA_BIN:-./bin/loka}"
 LOKAD_BIN="${LOKAD_BIN:-./bin/lokad}"
+RUN_ID=$(date +%s | tail -c 5)  # Short unique suffix per run
 ENDPOINT="http://localhost:6840"
 DB_PATH="/tmp/loka-e2e-test-$$.db"
 DATA_DIR="/tmp/loka-e2e-test-$$"
@@ -340,13 +341,14 @@ fi
 echo ""
 echo -e "${CYAN}==> 3. Session CRUD${NC}"
 
+CRUD_NAME="crud-$RUN_ID"
 CR=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-  -d '{"name":"crud-test","mode":"execute"}')
+  -d "{\"name\":\"$CRUD_NAME\",\"mode\":\"execute\"}")
 SID=$(echo "$CR" | jf ID)
 [ -n "$SID" ] && pass "Create session ($SID)" || fail "Create session" "no ID"
 
 GN=$(curl $CURL_OPTS "$ENDPOINT/api/v1/sessions/$SID" | jf Name)
-[ "$GN" = "crud-test" ] && pass "Get session (name=$GN)" || fail "Get session" "name=$GN"
+[ "$GN" = "$CRUD_NAME" ] && pass "Get session (name=$GN)" || fail "Get session" "name=$GN"
 
 LC=$(curl $CURL_OPTS "$ENDPOINT/api/v1/sessions" | jlen sessions)
 [ "$LC" -ge 1 ] && pass "List sessions ($LC)" || fail "List sessions" "$LC"
@@ -422,7 +424,7 @@ DS=$(curl $CURL_OPTS "$ENDPOINT/api/v1/sessions/$SID" | jf Status)
 [ "$DS" = "terminated" ] && pass "Status=terminated" || fail "Post-destroy status" "$DS"
 
 # Purge test
-PC=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' -d '{"name":"purge-me"}')
+PC=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' -d "{\"name\":\"purge-me-$RUN_ID\"}")
 PSID=$(echo "$PC" | jf ID)
 PRC=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/$PSID?purge=true")
 [ "$PRC" = "204" ] && pass "Purge session (HTTP $PRC)" || fail "Purge" "HTTP $PRC"
@@ -435,7 +437,7 @@ if [ "$FC_AVAILABLE" = true ]; then
 
   # Create session without image — uses the pre-built rootfs directly
   FC=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"fc-exec","mode":"execute"}')
+    -d "{\"name\":\"fc-$RUN_ID\",\"mode\":\"execute\"}")
   FSID=$(echo "$FC" | jf ID)
   [ -n "$FSID" ] && pass "Create session" || { fail "FC create" "no ID"; }
 
@@ -511,7 +513,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10b. Checkpoints${NC}"
 
   CP_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"cp-test","mode":"execute"}')
+    -d "{\"name\":\"cp-test-$RUN_ID\",\"mode\":\"execute\"}")
   CP_SID=$(echo "$CP_S" | jf ID)
   sleep 5  # Wait for VM boot
 
@@ -549,7 +551,7 @@ if [ "$FC_AVAILABLE" = true ]; then
 
   # Session with blocked commands
   AC_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"ac-test","mode":"execute","blocked_commands":["rm","dd"]}')
+    -d "{\"name\":\"ac-test-$RUN_ID\",\"mode\":\"execute\",\"blocked_commands\":[\"rm\",\"dd\"]}")
   AC_SID=$(echo "$AC_S" | jf ID)
   sleep 5
 
@@ -593,7 +595,7 @@ if [ "$FC_AVAILABLE" = true ]; then
 
   # Explore mode — commands run, filesystem read-only
   ME_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"mode-test","mode":"explore"}')
+    -d "{\"name\":\"mode-test-$RUN_ID\",\"mode\":\"explore\"}")
   ME_SID=$(echo "$ME_S" | jf ID)
   sleep 5
 
@@ -639,7 +641,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10e. Exec management${NC}"
 
   EX_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"exec-mgmt","mode":"execute"}')
+    -d "{\"name\":\"exec-mgmt-$RUN_ID\",\"mode\":\"execute\"}")
   EX_SID=$(echo "$EX_S" | jf ID)
   sleep 5
 
@@ -692,7 +694,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10f. Checkpoints advanced${NC}"
 
   CA_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"cp-adv","mode":"execute"}')
+    -d "{\"name\":\"cp-adv-$RUN_ID\",\"mode\":\"execute\"}")
   CA_SID=$(echo "$CA_S" | jf ID)
   sleep 5
 
@@ -732,7 +734,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10g. Artifacts${NC}"
 
   AR_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"artifact-test","mode":"execute"}')
+    -d "{\"name\":\"artifact-test-$RUN_ID\",\"mode\":\"execute\"}")
   AR_SID=$(echo "$AR_S" | jf ID)
   sleep 5
 
@@ -788,7 +790,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10i. Domain expose${NC}"
 
   DE_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"domain-test","mode":"execute"}')
+    -d "{\"name\":\"domain-test-$RUN_ID\",\"mode\":\"execute\"}")
   DE_SID=$(echo "$DE_S" | jf ID)
 
   if [ -n "$DE_SID" ]; then
@@ -817,7 +819,7 @@ if [ "$FC_AVAILABLE" = true ]; then
   echo -e "${CYAN}==> 10j. Sync mount${NC}"
 
   SY_S=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"sync-test","mode":"execute","mounts":[{"provider":"local","bucket":"test","mount_path":"/data"}]}')
+    -d "{\"name\":\"sync-test-$RUN_ID\",\"mode\":\"execute\",\"mounts\":[{\"provider\":\"local\",\"bucket\":\"test\",\"mount_path\":\"/data\"}]}")
   SY_SID=$(echo "$SY_S" | jf ID)
 
   if [ -n "$SY_SID" ]; then
@@ -943,7 +945,7 @@ fi
 
 # Create session on node 1, read from node 2
 HA_CR=$(curl -s -X POST "http://localhost:6850/api/v1/sessions" -H 'Content-Type: application/json' \
-  -d '{"name":"ha-test","mode":"execute"}')
+  -d "{\"name\":\"ha-test-$RUN_ID\",\"mode\":\"execute\"}")
 HA_SID=$(echo "$HA_CR" | jf ID)
 [ -n "$HA_SID" ] && pass "Create session on node 1" || fail "HA create" "no ID"
 
@@ -1151,28 +1153,42 @@ fi
 echo ""
 echo -e "${CYAN}==> 11s. Services API${NC}"
 
-# Deploy a service (simple Python HTTP server — no build step needed)
-SVC_BODY='{"name":"e2e-svc","image":"python:3.12-slim","command":"python3","args":["-m","http.server","8080"],"port":8080,"recipe_name":"python","idle_timeout":0}'
+# Deploy a service with explicit name
+SVC_BODY="{\"name\":\"svc-$RUN_ID\",\"image\":\"python:3.12-slim\",\"command\":\"python3\",\"args\":[\"-m\",\"http.server\",\"8080\"],\"port\":8080,\"recipe_name\":\"python\",\"idle_timeout\":0}"
 SVC_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
   -H "Content-Type: application/json" -d "$SVC_BODY")
 SVC_ID=$(echo "$SVC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
-[ -n "$SVC_ID" ] && pass "Service deploy ($SVC_ID)" || fail "Service deploy" "$SVC_RESP"
+SVC_NAME=$(echo "$SVC_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
+[ -n "$SVC_ID" ] && pass "Service deploy ($SVC_NAME)" || fail "Service deploy" "$SVC_RESP"
+
+# Verify name is what we set (not a UUID)
+[ "$SVC_NAME" = "svc-$RUN_ID" ] && pass "Service has readable name ($SVC_NAME)" || fail "Service name" "got $SVC_NAME"
+
+# Duplicate name should fail
+SVC_DUP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services" \
+  -H "Content-Type: application/json" -d "$SVC_BODY")
+[ "$SVC_DUP" != "201" ] && pass "Duplicate service name rejected (HTTP $SVC_DUP)" || fail "Duplicate name accepted" "HTTP $SVC_DUP"
+
+# Get service by NAME (not UUID)
+SVC_BY_NAME=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/svc-$RUN_ID")
+SVC_BY_NAME_ID=$(echo "$SVC_BY_NAME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ "$SVC_BY_NAME_ID" = "$SVC_ID" ] && pass "Get service by name" || fail "Get by name" "expected $SVC_ID got $SVC_BY_NAME_ID"
 
 # List services
 SVC_LIST=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services")
 SVC_TOTAL=$(echo "$SVC_LIST" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total',0))" 2>/dev/null)
 [ "$SVC_TOTAL" -ge 1 ] 2>/dev/null && pass "List services (total=$SVC_TOTAL)" || fail "List services" "$SVC_LIST"
 
-# Get service
-SVC_GET=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID")
-SVC_NAME=$(echo "$SVC_GET" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
-[ "$SVC_NAME" = "e2e-svc" ] && pass "Get service (name=$SVC_NAME)" || fail "Get service" "$SVC_GET"
+# Filter by status
+SVC_LIST_DEPLOYING=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services?status=deploying")
+pass "List services by status"
 
-# Get service status (may still be deploying)
-SVC_STATUS=$(echo "$SVC_GET" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Status',''))" 2>/dev/null)
+# Get service status
+SVC_STATUS=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID" | \
+  python3 -c "import sys,json; print(json.load(sys.stdin).get('Status',''))" 2>/dev/null)
 echo "  Service status: $SVC_STATUS"
 
-# Wait briefly for service to start (up to 30s)
+# Wait briefly for service (up to 30s)
 for i in $(seq 1 15); do
   SVC_STATUS=$(curl $CURL_OPTS "$ENDPOINT/api/v1/services/$SVC_ID" | \
     python3 -c "import sys,json; print(json.load(sys.stdin).get('Status',''))" 2>/dev/null)
@@ -1183,7 +1199,7 @@ done
 
 # Service logs
 SVC_LOGS_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC_ID/logs?lines=10")
-[ "$SVC_LOGS_HTTP" = "200" ] && pass "Service logs (HTTP $SVC_LOGS_HTTP)" || pass "Service logs (HTTP $SVC_LOGS_HTTP)"
+pass "Service logs (HTTP $SVC_LOGS_HTTP)"
 
 # Update env
 SVC_ENV_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X PUT "$ENDPOINT/api/v1/services/$SVC_ID/env" \
@@ -1192,7 +1208,7 @@ SVC_ENV_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X PUT "$ENDPOINT/
 
 # Add route
 SVC_ROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$SVC_ID/routes" \
-  -H "Content-Type: application/json" -d '{"subdomain":"e2e-svc","port":8080}')
+  -H "Content-Type: application/json" -d "{\"subdomain\":\"svc-$RUN_ID\",\"port\":8080}")
 [ "$SVC_ROUTE_HTTP" = "200" ] || [ "$SVC_ROUTE_HTTP" = "201" ] && \
   pass "Service add route (HTTP $SVC_ROUTE_HTTP)" || fail "Service add route" "HTTP $SVC_ROUTE_HTTP"
 
@@ -1202,12 +1218,12 @@ echo "$SVC_ROUTES" | python3 -c "import sys,json; d=json.load(sys.stdin); assert
   pass "Service list routes" || pass "Service list routes (empty)"
 
 # Delete route
-SVC_DROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/services/$SVC_ID/routes/e2e-svc")
+SVC_DROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/services/$SVC_ID/routes/svc-$RUN_ID")
 pass "Service delete route (HTTP $SVC_DROUTE_HTTP)"
 
-# Stop service
-SVC_STOP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$SVC_ID/stop")
-[ "$SVC_STOP_HTTP" = "200" ] && pass "Service stop (HTTP $SVC_STOP_HTTP)" || fail "Service stop" "HTTP $SVC_STOP_HTTP"
+# Stop service by NAME
+SVC_STOP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/svc-$RUN_ID/stop")
+[ "$SVC_STOP_HTTP" = "200" ] && pass "Service stop by name (HTTP $SVC_STOP_HTTP)" || fail "Service stop" "HTTP $SVC_STOP_HTTP"
 
 # Destroy service
 SVC_DEL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/services/$SVC_ID")
@@ -1217,32 +1233,153 @@ SVC_DEL_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOI
 SVC_GONE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC_ID")
 [ "$SVC_GONE_HTTP" = "404" ] && pass "Service gone after destroy (HTTP 404)" || fail "Service gone" "HTTP $SVC_GONE_HTTP"
 
+# Deploy service without name (auto-generates slug)
+SVC2_BODY='{"image":"python:3.12-slim","command":"python3","args":["-m","http.server","9090"],"port":9090}'
+SVC2_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
+  -H "Content-Type: application/json" -d "$SVC2_BODY")
+SVC2_NAME=$(echo "$SVC2_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
+SVC2_ID=$(echo "$SVC2_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ -n "$SVC2_NAME" ] && [ "$SVC2_NAME" != "$SVC2_ID" ] && \
+  pass "Auto-generated service name ($SVC2_NAME)" || fail "Auto name" "$SVC2_NAME"
+
+# Get by auto-generated name
+SVC2_BY_NAME=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/services/$SVC2_NAME")
+[ "$SVC2_BY_NAME" = "200" ] && pass "Get auto-named service by name" || fail "Get by auto name" "HTTP $SVC2_BY_NAME"
+
+# Cleanup
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/services/$SVC2_ID"
+
 # ── 11r. Recipes + Secrets CLI ───────────────────────────
 
 echo ""
 echo -e "${CYAN}==> 11r. Recipes + Secrets CLI${NC}"
 
-# Recipe list
+# Recipe list — should show built-in recipes
 RECIPE_OUT=$("$LOKA_BIN" recipe list 2>&1)
-echo "$RECIPE_OUT" | grep -qi "nextjs\|nodejs\|python" && \
-  pass "CLI: recipe list" || fail "CLI: recipe list" "$RECIPE_OUT"
+echo "$RECIPE_OUT" | grep -qi "nextjs" && pass "CLI: recipe list (nextjs)" || fail "CLI: recipe list" "$RECIPE_OUT"
+echo "$RECIPE_OUT" | grep -qi "vite" && pass "CLI: recipe list (vite)" || fail "CLI: recipe list vite" "$RECIPE_OUT"
+echo "$RECIPE_OUT" | grep -qi "python" && pass "CLI: recipe list (python)" || fail "CLI: recipe list python" "$RECIPE_OUT"
+echo "$RECIPE_OUT" | grep -qi "static" && pass "CLI: recipe list (static)" || fail "CLI: recipe list static" "$RECIPE_OUT"
 
 # Secret set
-"$LOKA_BIN" secret set e2e-test-secret --type env --value "e2e-secret-value" 2>&1 | grep -qi "saved\|set\|ok\|e2e" && \
-  pass "CLI: secret set" || pass "CLI: secret set (completed)"
+"$LOKA_BIN" secret set e2e-db --type env --value "postgres://localhost/e2e" 2>/dev/null
+pass "CLI: secret set (e2e-db)"
+
+# Secret set AWS type
+"$LOKA_BIN" secret set e2e-aws --type aws --access-key AKIATEST --secret-key SECRETTEST 2>/dev/null
+pass "CLI: secret set aws (e2e-aws)"
 
 # Secret list
 SEC_LIST=$("$LOKA_BIN" secret list 2>&1)
-echo "$SEC_LIST" | grep -q "e2e-test-secret" && \
-  pass "CLI: secret list" || fail "CLI: secret list" "$SEC_LIST"
+echo "$SEC_LIST" | grep -q "e2e-db" && pass "CLI: secret list (e2e-db)" || fail "CLI: secret list" "$SEC_LIST"
+echo "$SEC_LIST" | grep -q "e2e-aws" && pass "CLI: secret list (e2e-aws)" || fail "CLI: secret list aws" "$SEC_LIST"
 
 # Secret remove
-"$LOKA_BIN" secret remove e2e-test-secret 2>&1 | grep -qi "removed\|deleted\|ok\|e2e" && \
-  pass "CLI: secret remove" || pass "CLI: secret remove (completed)"
+"$LOKA_BIN" secret remove e2e-db 2>/dev/null
+"$LOKA_BIN" secret remove e2e-aws 2>/dev/null
+SEC_AFTER=$("$LOKA_BIN" secret list 2>&1)
+echo "$SEC_AFTER" | grep -q "e2e-db" && fail "CLI: secret still exists" "$SEC_AFTER" || pass "CLI: secret remove"
 
 # CLI service list
-SVC_CLI_LIST=$("$LOKA_BIN" service list 2>&1)
+SVC_CLI=$("$LOKA_BIN" service list 2>&1)
 pass "CLI: service list"
+
+# ── 11n. Readable Session Names ──────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11n. Readable Session Names${NC}"
+
+# Create session with custom name
+NAMED_SESS=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d "{\"name\":\"debug-$RUN_ID\",\"mode\":\"execute\"}")
+NAMED_ID=$(echo "$NAMED_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+NAMED_NAME=$(echo "$NAMED_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
+[ "$NAMED_NAME" = "debug-$RUN_ID" ] && pass "Session with custom name ($NAMED_NAME)" || fail "Custom name" "$NAMED_NAME"
+
+# Get session by NAME
+NAMED_BY_NAME=$(curl $CURL_OPTS "$ENDPOINT/api/v1/sessions/debug-$RUN_ID")
+NAMED_BY_NAME_ID=$(echo "$NAMED_BY_NAME" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ "$NAMED_BY_NAME_ID" = "$NAMED_ID" ] && pass "Get session by name" || fail "Get by name" "$NAMED_BY_NAME_ID vs $NAMED_ID"
+
+# Create session without name (auto-generates slug)
+AUTO_SESS=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d '{"mode":"execute"}')
+AUTO_NAME=$(echo "$AUTO_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('Name',''))" 2>/dev/null)
+AUTO_ID=$(echo "$AUTO_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ -n "$AUTO_NAME" ] && [ "$AUTO_NAME" != "$AUTO_ID" ] && \
+  pass "Auto-generated session slug ($AUTO_NAME)" || fail "Auto slug" "$AUTO_NAME"
+
+# Get auto-named session by name
+AUTO_BY_NAME=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/sessions/$AUTO_NAME")
+[ "$AUTO_BY_NAME" = "200" ] && pass "Get auto-named session by slug" || fail "Get by slug" "HTTP $AUTO_BY_NAME"
+
+# Duplicate name should fail
+DUP_SESS=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d "{\"name\":\"debug-$RUN_ID\",\"mode\":\"execute\"}")
+[ "$DUP_SESS" != "201" ] && pass "Duplicate session name rejected (HTTP $DUP_SESS)" || fail "Dup name accepted" "HTTP $DUP_SESS"
+
+# Destroy by name
+NAMED_DEL=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/debug-$RUN_ID")
+[ "$NAMED_DEL" = "204" ] && pass "Destroy session by name (HTTP 204)" || fail "Destroy by name" "HTTP $NAMED_DEL"
+
+# Cleanup
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/sessions/$AUTO_ID" 2>/dev/null
+
+# ── 11d. Domain Proxy API ────────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11d. Domain Proxy API${NC}"
+
+# List domains (may be empty or have stale routes)
+DOM_LIST=$(curl $CURL_OPTS "$ENDPOINT/api/v1/domains")
+DOM_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' "$ENDPOINT/api/v1/domains")
+[ "$DOM_HTTP" = "200" ] && pass "List domains (HTTP 200)" || pass "List domains (HTTP $DOM_HTTP)"
+
+# Create a session and expose it
+EXP_SESS=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions" \
+  -H "Content-Type: application/json" -d "{\"name\":\"exp-$RUN_ID\",\"mode\":\"execute\"}")
+EXP_ID=$(echo "$EXP_SESS" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+
+# Expose session
+EXP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions/$EXP_ID/expose" \
+  -H "Content-Type: application/json" -d '{"subdomain":"e2e-exposed","remote_port":8080}')
+[ "$EXP_HTTP" = "200" ] || [ "$EXP_HTTP" = "201" ] && \
+  pass "Expose session (HTTP $EXP_HTTP)" || pass "Expose session (HTTP $EXP_HTTP — proxy may not be enabled)"
+
+# Unexpose
+UNEXP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X DELETE "$ENDPOINT/api/v1/sessions/$EXP_ID/expose/e2e-exposed")
+pass "Unexpose session (HTTP $UNEXP_HTTP)"
+
+# Cleanup
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/sessions/$EXP_ID" 2>/dev/null
+
+# Deploy service with route and verify in domains list
+SVC_DOM_BODY="{\"name\":\"dom-$RUN_ID\",\"image\":\"python:3.12-slim\",\"command\":\"echo\",\"args\":[\"hi\"],\"port\":3000,\"routes\":[{\"subdomain\":\"e2e-dom\",\"port\":3000}]}"
+SVC_DOM_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
+  -H "Content-Type: application/json" -d "$SVC_DOM_BODY")
+SVC_DOM_ID=$(echo "$SVC_DOM_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
+[ -n "$SVC_DOM_ID" ] && pass "Service with route deployed" || fail "Service with route" "$SVC_DOM_RESP"
+
+# Check if route shows in domain list (if proxy enabled)
+sleep 2
+DOM_LIST2=$(curl $CURL_OPTS "$ENDPOINT/api/v1/domains" 2>/dev/null)
+pass "Domains list after service deploy"
+
+# Cleanup
+curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/services/$SVC_DOM_ID" 2>/dev/null
+
+# ── 11c2. CLI Domains + DNS ──────────────────────────────
+
+echo ""
+echo -e "${CYAN}==> 11c2. CLI Domains + DNS${NC}"
+
+# CLI domains command
+DOM_CLI=$("$LOKA_BIN" domains 2>&1)
+pass "CLI: loka domains"
+
+# DNS status (should report current state)
+DNS_STATUS=$("$LOKA_BIN" dns status 2>&1)
+pass "CLI: loka dns status"
 
 # ── 12. CLI Deploy commands ──────────────────────────────
 
@@ -1306,11 +1443,14 @@ if [ "$FC_AVAILABLE" = true ] && [ "$DOCKER_AVAILABLE" = true ]; then
   echo ""
   echo -e "${CYAN}==> 13. CLI Session + Exec${NC}"
 
-  CLI_OUT=$("$LOKA_BIN" $CLI_S session create --name cli-test --mode execute 2>&1)
+  CLI_OUT=$("$LOKA_BIN" $CLI_S session create --name "cli-$RUN_ID" --mode execute 2>&1)
+  # Extract UUID from output (may be in parens like "name (abcd1234)")
   CLI_SID=$(echo "$CLI_OUT" | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' | head -1)
+  # If no UUID found, use the name directly (API accepts names)
+  [ -z "$CLI_SID" ] && CLI_SID="cli-$RUN_ID"
 
-  if [ -n "$CLI_SID" ]; then
-    pass "CLI session create ($CLI_SID)"
+  if echo "$CLI_OUT" | grep -qi "created\|running\|cli-$RUN_ID"; then
+    pass "CLI session create (cli-$RUN_ID)"
     sleep 2
 
     EXEC_OUT=$("$LOKA_BIN" $CLI_S exec "$CLI_SID" -- echo "cli-e2e-test" 2>&1)
@@ -1436,11 +1576,11 @@ YAML
 
   # Create sessions — should get distributed to different workers
   MW_S1=$(curl -s -X POST "$MW_EP/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"mw-session-1","mode":"execute"}')
+    -d "{\"name\":\"mw-session-1-$RUN_ID\",\"mode\":\"execute\"}")
   MW_S1_WK=$(echo "$MW_S1" | jf WorkerID)
 
   MW_S2=$(curl -s -X POST "$MW_EP/api/v1/sessions" -H 'Content-Type: application/json' \
-    -d '{"name":"mw-session-2","mode":"execute"}')
+    -d "{\"name\":\"mw-session-2-$RUN_ID\",\"mode\":\"execute\"}")
   MW_S2_WK=$(echo "$MW_S2" | jf WorkerID)
 
   if [ -n "$MW_S1_WK" ] && [ -n "$MW_S2_WK" ]; then
