@@ -224,16 +224,16 @@ func deployLocalMacOS(name string, foreground bool) error {
 		fi
 
 		# Rootfs: check pre-installed (ISO) or existing, else build from minirootfs.
-		# Rebuild if file is too small (< 50MB means blank ext4 without tools).
-		RF_SIZE=$(stat -c%s /tmp/loka-data/rootfs/rootfs.ext4 2>/dev/null || echo 0)
-		if [ ! -f /tmp/loka-data/rootfs/rootfs.ext4 ] || [ "$RF_SIZE" -lt 50000000 ]; then
+		# Rebuild if missing or empty (check actual disk usage, not apparent size for sparse files).
+		RF_BLOCKS=$(du -k /tmp/loka-data/rootfs/rootfs.ext4 2>/dev/null | awk '{print $1}')
+		if [ ! -f /tmp/loka-data/rootfs/rootfs.ext4 ] || [ "${RF_BLOCKS:-0}" -lt 10000 ]; then
 		rm -f /tmp/loka-data/rootfs/rootfs.ext4
 			if [ -f /usr/share/loka/rootfs.ext4 ]; then
 				cp /usr/share/loka/rootfs.ext4 /tmp/loka-data/rootfs/rootfs.ext4
 			else
 				ARCH=$(uname -m)
 				curl -fsSL "https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/${ARCH}/alpine-minirootfs-3.21.3-${ARCH}.tar.gz" -o /tmp/alpine.tar.gz 2>/dev/null
-				dd if=/dev/zero of=/tmp/loka-data/rootfs/rootfs.ext4 bs=1M count=128 2>/dev/null
+				truncate -s 4G /tmp/loka-data/rootfs/rootfs.ext4
 				mkfs.ext4 -F /tmp/loka-data/rootfs/rootfs.ext4 >/dev/null 2>&1
 				mkdir -p /tmp/mnt-rootfs
 				mount -o loop /tmp/loka-data/rootfs/rootfs.ext4 /tmp/mnt-rootfs

@@ -166,22 +166,12 @@ func (m *Manager) convertToRootfs(ctx context.Context, reference, rootfsPath str
 		return fmt.Errorf("docker export: %w", err)
 	}
 
-	// Size the ext4 image based on the exported tar + 50% headroom.
-	// This avoids creating a fixed 2GB image for a 200MB Docker export.
-	tarInfo, err := os.Stat(tarPath)
-	if err != nil {
-		return fmt.Errorf("stat tar: %w", err)
-	}
-	sizeMB := int(tarInfo.Size()/(1024*1024)*3/2) + 128 // 1.5x tar size + 128MB for overhead
-	if sizeMB < 256 {
-		sizeMB = 256 // Minimum 256MB
-	}
-	if sizeMB > 4096 {
-		sizeMB = 4096 // Cap at 4GB
-	}
-	if err := runCmd(ctx, "dd", "if=/dev/zero", "of="+rootfsPath,
-		"bs=1M", fmt.Sprintf("count=%d", sizeMB)); err != nil {
-		return fmt.Errorf("create image: %w", err)
+	// Create a sparse ext4 image. Sparse files only allocate disk blocks for
+	// data that's actually written — a 4GB sparse file with 200MB of content
+	// uses only ~200MB on disk. This gives VMs plenty of room to install
+	// dependencies without wasting disk upfront.
+	if err := runCmd(ctx, "truncate", "-s", "4G", rootfsPath); err != nil {
+		return fmt.Errorf("create sparse image: %w", err)
 	}
 	if err := runCmd(ctx, "mkfs.ext4", "-F", rootfsPath); err != nil {
 		return fmt.Errorf("mkfs: %w", err)
