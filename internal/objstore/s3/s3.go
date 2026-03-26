@@ -1,6 +1,7 @@
 package s3
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 
@@ -17,8 +19,10 @@ import (
 
 // Config configures the S3-compatible object store.
 type Config struct {
-	Region   string // AWS region (e.g. "us-east-1").
-	Endpoint string // Custom endpoint for MinIO, R2, etc. Empty = AWS S3.
+	Region    string // AWS region (e.g. "us-east-1").
+	Endpoint  string // Custom endpoint for MinIO, R2, etc. Empty = AWS S3.
+	AccessKey string // Static access key (for MinIO, etc.). Empty = use default credential chain.
+	SecretKey string // Static secret key.
 }
 
 // Store implements objstore.ObjectStore using AWS S3 or any S3-compatible API.
@@ -33,6 +37,11 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 	if cfg.Region != "" {
 		opts = append(opts, awsconfig.WithRegion(cfg.Region))
 	}
+	if cfg.AccessKey != "" && cfg.SecretKey != "" {
+		opts = append(opts, awsconfig.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(cfg.AccessKey, cfg.SecretKey, ""),
+		))
+	}
 
 	awsCfg, err := awsconfig.LoadDefaultConfig(ctx, opts...)
 	if err != nil {
@@ -44,6 +53,9 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 		s3Opts = append(s3Opts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
 			o.UsePathStyle = true // Required for MinIO / custom endpoints.
+			// Disable request checksums for non-TLS endpoints (MinIO over HTTP).
+			o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+			o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 		})
 	}
 
@@ -55,15 +67,19 @@ func New(ctx context.Context, cfg Config) (*Store, error) {
 }
 
 func (s *Store) Put(ctx context.Context, bucket, key string, reader io.Reader, size int64) error {
+	// Read into bytes so the body is seekable (required by AWS SDK v2 for checksums).
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return fmt.Errorf("s3 put read body: %w", err)
+	}
+
 	input := &s3.PutObjectInput{
-		Bucket: aws.String(bucket),
-		Key:    aws.String(key),
-		Body:   reader,
+		Bucket:        aws.String(bucket),
+		Key:           aws.String(key),
+		Body:          bytes.NewReader(data),
+		ContentLength: aws.Int64(int64(len(data))),
 	}
-	if size >= 0 {
-		input.ContentLength = aws.Int64(size)
-	}
-	_, err := s.client.PutObject(ctx, input)
+	_, err = s.client.PutObject(ctx, input)
 	if err != nil {
 		return fmt.Errorf("s3 put: %w", err)
 	}

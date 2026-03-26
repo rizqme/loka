@@ -2,7 +2,7 @@ package supervisor
 
 // Hardening documents the security posture and known limitations.
 //
-// TRUST BOUNDARY: The Firecracker microVM is the trust boundary,
+// TRUST BOUNDARY: The lokavm microVM is the trust boundary,
 // NOT the command proxy. Code inside the VM can do anything
 // the OS allows. The proxy provides UX feedback, not security.
 //
@@ -37,12 +37,12 @@ package supervisor
 // - DNS exfiltration (mitigate: DNS proxy with logging)
 // - Timing side-channels (mitigate: noisy neighbor defense)
 // - Guest kernel exploit (mitigate: minimal kernel, patch)
-// - Firecracker VMM exploit (mitigate: jailer, seccomp)
+// - lokavm VMM exploit (mitigate: jailer, seccomp)
 
 // HardeningChecklist is the production deployment checklist.
 type HardeningChecklist struct {
 	// VM-level.
-	FirecrackerJailer  bool // Run each VM under separate UID with chroot.
+	lokavmJailer  bool // Run each VM under separate UID with chroot.
 	MinimalGuestKernel bool // 5.10+ with minimal modules, no debug.
 	GuestRootfsRO      bool // Base rootfs is read-only.
 	NoCapSysAdmin      bool // Guest cannot remount, modprobe, etc.

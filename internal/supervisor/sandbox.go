@@ -20,7 +20,7 @@ import (
 //  4. Seccomp Filter   — blocks execve/fork/clone for untrusted processes
 //  5. Network Filter   — iptables blocks outbound in inspect/plan modes
 //
-// In a Firecracker microVM, these are enforced by the guest kernel.
+// In a lokavm microVM, these are enforced by the guest kernel.
 // For local dev mode, we simulate via PATH restriction and proxy checks.
 type Sandbox struct {
 	policy  loka.ExecPolicy
@@ -46,7 +46,7 @@ func (s *Sandbox) SetMode(mode loka.ExecMode) error {
 }
 
 // Apply enforces the current policy and mode at the OS level.
-// In production (Firecracker VM), this calls mount/iptables/seccomp.
+// In production (lokavm VM), this calls mount/iptables/seccomp.
 // For dev mode, it manages the /env/bin directory.
 func (s *Sandbox) Apply() error {
 	if err := s.applyBinaryRestrictions(); err != nil {
@@ -132,7 +132,7 @@ func (s *Sandbox) RestrictedPATH() string {
 
 // ── Filesystem Mount (production only) ──────────────────
 //
-// In a Firecracker VM, the workspace is an overlayfs mount.
+// In a lokavm VM, the workspace is an overlayfs mount.
 // The sandbox controls whether it's mounted RO or RW based on mode:
 //
 //   inspect/plan: mount -o remount,ro /workspace
@@ -153,7 +153,7 @@ func (s *Sandbox) FilesystemMode() string {
 
 // ── Network Filter (production only) ────────────────────
 //
-// In a Firecracker VM, network access is controlled via iptables
+// In a lokavm VM, network access is controlled via iptables
 // on the host TAP interface:
 //
 //   inspect/plan: iptables -A FORWARD -o <tap> -j DROP (except DNS)
@@ -209,7 +209,7 @@ func (s *Sandbox) SeccompProfile() string {
 //   - Cannot be bypassed — the binary literally doesn't exist
 //   - Enforced by PATH restriction + /env/bin projection
 //
-// Layer 3: Filesystem Mount (Firecracker)
+// Layer 3: Filesystem Mount (lokavm)
 //   - Workspace is read-only in inspect/plan modes
 //   - Kernel-enforced, cannot be bypassed from inside VM
 //

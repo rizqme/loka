@@ -215,9 +215,12 @@ func (s *Server) routes() {
 		r.Delete("/services/{id}/routes/{subdomain}", s.removeServiceRoute)
 		r.Get("/services/{id}/routes", s.listServiceRoutes)
 
-		// Object store (service bundles) — public API for CLI uploads.
+		// Object store — public API.
 		r.Put("/objstore/objects/{bucket}/*", s.objStorePut)
 		r.Get("/objstore/objects/{bucket}/*", s.objStoreGet)
+		r.Head("/objstore/objects/{bucket}/*", s.objStoreHead)
+		r.Delete("/objstore/objects/{bucket}/*", s.objStoreDelete)
+		r.Get("/objstore/list/{bucket}", s.objStoreList)
 
 		// Workers
 		r.Get("/workers", s.listWorkers)

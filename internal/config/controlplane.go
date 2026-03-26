@@ -71,12 +71,14 @@ type CoordinatorConfig struct {
 
 // ObjectStoreConfig selects and configures the object store.
 type ObjectStoreConfig struct {
-	Type     string `yaml:"type"`     // "local", "s3", "gcs", "azure"
-	Path     string `yaml:"path"`     // Local/embedded filesystem path.
-	Bucket   string `yaml:"bucket"`   // S3/GCS bucket name or Azure container name.
-	Region   string `yaml:"region"`   // S3/Azure region.
-	Endpoint string `yaml:"endpoint"` // Custom S3 endpoint (for MinIO, R2, etc).
-	Account  string `yaml:"account"`  // Azure storage account name.
+	Type      string `yaml:"type"`       // "local", "s3", "gcs", "azure"
+	Path      string `yaml:"path"`       // Local/embedded filesystem path.
+	Bucket    string `yaml:"bucket"`     // S3/GCS bucket name or Azure container name.
+	Region    string `yaml:"region"`     // S3/Azure region.
+	Endpoint  string `yaml:"endpoint"`   // Custom S3 endpoint (for MinIO, R2, etc).
+	AccessKey string `yaml:"access_key"` // S3 static access key (MinIO, R2, etc).
+	SecretKey string `yaml:"secret_key"` // S3 static secret key.
+	Account   string `yaml:"account"`    // Azure storage account name.
 }
 
 // SchedulerConfig configures the session scheduler.

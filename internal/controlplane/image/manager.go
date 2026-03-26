@@ -1,6 +1,7 @@
 package image
 
 import (
+	"archive/tar"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
@@ -15,10 +16,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/go-containerregistry/pkg/crane"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/uuid"
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/objstore"
-	"github.com/vyprai/loka/internal/worker/vm"
+	"github.com/vyprai/loka/pkg/lokavm"
 )
 
 const (
@@ -30,7 +33,7 @@ const (
 type Manager struct {
 	images    map[string]*loka.Image // In-memory for now; production uses DB.
 	objStore  objstore.ObjectStore
-	vmManager *vm.Manager // VM manager for creating warm snapshots (may be nil).
+	hypervisor lokavm.Hypervisor // Hypervisor for creating warm snapshots (may be nil).
 	dataDir   string      // Local cache directory.
 	logger    *slog.Logger
 }
@@ -46,10 +49,9 @@ func NewManager(objStore objstore.ObjectStore, dataDir string, logger *slog.Logg
 	}
 }
 
-// SetVMManager sets the VM manager used for creating warm snapshots.
-// Must be called before Pull if warm snapshots are desired.
-func (m *Manager) SetVMManager(vmMgr *vm.Manager) {
-	m.vmManager = vmMgr
+// SetHypervisor sets the hypervisor used for creating warm snapshots.
+func (m *Manager) SetHypervisor(h lokavm.Hypervisor) {
+	m.hypervisor = h
 }
 
 // dockerSaveManifest represents one entry in the manifest.json produced
@@ -68,18 +70,15 @@ type layerInfo struct {
 	TarPath string // Absolute path to the extracted layer tar (temporary).
 }
 
-// Pull downloads a Docker image, extracts its layers, builds a layer-pack
-// ext4, and uploads everything to the object store.
+// Pull downloads an OCI image from a registry, extracts it to a plain directory,
+// and injects loka-supervisor. No Docker daemon required — uses crane (pure Go).
 //
 // Steps:
-//  1. docker pull <reference>
-//  2. docker save <reference> > image.tar (preserves layers)
-//  3. Extract and parse manifest.json to discover layers
-//  4. For each layer: compute digest, create ext4, upload (deduplicated)
-//  5. Build layer-pack ext4 (all layers as /0/, /1/, /2/...)
-//  6. Inject loka-supervisor into the top layer
-//  7. Upload layer-pack to object store
-//  8. Optionally: boot in Firecracker and create warm snapshot
+//  1. crane.Pull() — fetch image from registry
+//  2. mutate.Extract() — flatten all layers into single tar stream
+//  3. Extract tar to directory (the rootfs)
+//  4. Inject loka-supervisor into /usr/local/bin/
+//  5. Store rootfs directory path
 func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, error) {
 	// Check if already pulled.
 	for _, img := range m.images {
@@ -99,117 +98,124 @@ func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, erro
 
 	m.logger.Info("pulling image", "id", id, "reference", reference)
 
-	// Step 1: Pull the Docker image.
-	if err := runCmd(ctx, "docker", "pull", reference); err != nil {
+	// Step 1: Pull image from registry (no Docker daemon needed).
+	// Always pull linux/arm64 — VMs run ARM64 Linux regardless of host arch.
+	remoteImg, err := crane.Pull(reference, crane.WithContext(ctx), crane.WithPlatform(&v1.Platform{
+		OS: "linux", Architecture: "arm64",
+	}))
+	if err != nil {
 		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("docker pull: %w", err)
+		return img, fmt.Errorf("pull %s: %w", reference, err)
 	}
 
 	// Get digest.
-	digest, _ := cmdOutput(ctx, "docker", "inspect", "--format={{index .RepoDigests 0}}", reference)
-	img.Digest = strings.TrimSpace(digest)
+	digest, err := remoteImg.Digest()
+	if err == nil {
+		img.Digest = digest.String()
+	}
 
-	// Step 2: docker save to get layered tar.
+	// Get layers metadata.
+	remoteLayers, _ := remoteImg.Layers()
+	for _, l := range remoteLayers {
+		d, _ := l.Digest()
+		sz, _ := l.Size()
+		img.Layers = append(img.Layers, loka.ImageLayer{
+			Digest: d.String(),
+			Size:   sz,
+		})
+	}
+
 	img.Status = loka.ImageStatusConverting
+	m.logger.Info("extracting layers", "id", id, "count", len(remoteLayers))
 
-	tmpDir, err := os.MkdirTemp("", "loka-layers-*")
-	if err != nil {
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("create temp dir: %w", err)
-	}
-	defer os.RemoveAll(tmpDir)
+	// Step 2: Extract each layer individually (deduplicated by digest).
+	// Layers are stored in $dataDir/layers/<digest>/ — shared across images.
+	layersBaseDir := filepath.Join(m.dataDir, "layers")
+	var layerDirs []string
 
-	savePath := filepath.Join(tmpDir, "image.tar")
-	if err := runCmd(ctx, "docker", "save", "-o", savePath, reference); err != nil {
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("docker save: %w", err)
-	}
+	for i, l := range remoteLayers {
+		d, _ := l.Digest()
+		layerDir := filepath.Join(layersBaseDir, d.Hex)
 
-	// Step 3: Extract and parse manifest to discover layers.
-	layers, err := m.extractLayers(ctx, savePath, tmpDir)
-	if err != nil {
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("extract layers: %w", err)
-	}
-
-	m.logger.Info("extracted layers", "id", id, "count", len(layers))
-
-	// Step 4: Upload each layer (deduplicated by digest).
-	for i := range layers {
-		layer := &layers[i]
-		exists, existsErr := m.objStore.Exists(ctx, layerBucket, layer.ObjKey)
-		if existsErr != nil {
-			m.logger.Warn("checking layer existence failed, will re-upload",
-				"digest", layer.Digest, "error", existsErr)
-		}
-		if exists {
-			m.logger.Info("layer already exists, skipping upload", "digest", layer.Digest)
+		// Skip if already extracted (deduplication).
+		if _, err := os.Stat(layerDir); err == nil {
+			m.logger.Info("layer cached", "digest", d.Hex[:12], "index", i)
+			layerDirs = append(layerDirs, layerDir)
 			continue
 		}
 
-		f, openErr := os.Open(layer.TarPath)
-		if openErr != nil {
+		// Extract layer tar to directory.
+		os.MkdirAll(layerDir, 0o755)
+		lr, err := l.Uncompressed()
+		if err != nil {
 			img.Status = loka.ImageStatusFailed
-			return img, fmt.Errorf("open layer tar %s: %w", layer.Digest, openErr)
+			return img, fmt.Errorf("uncompress layer %d: %w", i, err)
 		}
-		info, _ := os.Stat(layer.TarPath)
-		if uploadErr := m.objStore.Put(ctx, layerBucket, layer.ObjKey, f, info.Size()); uploadErr != nil {
-			f.Close()
+		if err := extractTarToDir(lr, layerDir); err != nil {
+			lr.Close()
 			img.Status = loka.ImageStatusFailed
-			return img, fmt.Errorf("upload layer %s: %w", layer.Digest, uploadErr)
+			return img, fmt.Errorf("extract layer %d: %w", i, err)
 		}
-		f.Close()
-		m.logger.Info("uploaded layer", "digest", layer.Digest, "size", layer.Size)
+		lr.Close()
+		m.logger.Info("layer extracted", "digest", d.Hex[:12], "index", i)
+		layerDirs = append(layerDirs, layerDir)
 	}
 
-	// Step 5: Build layer-pack ext4 (all layers combined).
-	layerPackPath := filepath.Join(tmpDir, "layer-pack.ext4")
-	if err := m.buildLayerPack(ctx, layers, layerPackPath, reference); err != nil {
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("build layer-pack: %w", err)
-	}
+	// Store layer dir paths in image metadata for VM boot.
+	img.LayerPackKey = strings.Join(layerDirs, ":")
 
-	// Step 6: Upload layer-pack to object store.
-	img.LayerPackKey = fmt.Sprintf("images/%s/layer-pack.ext4", id)
-	packInfo, _ := os.Stat(layerPackPath)
-	if packInfo != nil {
-		img.SizeMB = packInfo.Size() / (1024 * 1024)
-	}
-
-	packFile, err := os.Open(layerPackPath)
-	if err != nil {
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("open layer-pack: %w", err)
-	}
-	if err := m.objStore.Put(ctx, imageBucket, img.LayerPackKey, packFile, packInfo.Size()); err != nil {
-		packFile.Close()
-		img.Status = loka.ImageStatusFailed
-		return img, fmt.Errorf("upload layer-pack: %w", err)
-	}
-	packFile.Close()
-
-	// Populate image metadata.
-	imgLayers := make([]loka.ImageLayer, len(layers))
-	for i, l := range layers {
-		imgLayers[i] = l.ImageLayer
-	}
-	img.Layers = imgLayers
-	img.RootfsPath = img.LayerPackKey // Backward compatibility for existing callers.
-
-	// Step 7: Create warm snapshot for fast future boots.
-	if m.vmManager != nil {
-		img.Status = loka.ImageStatusWarming
-		memKey, stateKey, snapErr := m.createWarmSnapshot(ctx, img, layerPackPath)
-		if snapErr != nil {
-			m.logger.Warn("warm snapshot failed, cold boot will be used",
-				"id", id, "error", snapErr)
-		} else {
-			img.SnapshotMem = memKey
-			img.SnapshotVMState = stateKey
-			m.logger.Info("warm snapshot created",
-				"id", id, "mem_key", memKey, "state_key", stateKey)
+	// Step 3: Create loka overlay layer (topmost) with supervisor + busybox symlinks.
+	// This is a separate layer that gets stacked on top of the image layers.
+	lokaLayerDir := filepath.Join(m.dataDir, "layers", "loka-overlay")
+	if _, err := os.Stat(filepath.Join(lokaLayerDir, "usr/local/bin/loka-supervisor")); os.IsNotExist(err) {
+		os.MkdirAll(lokaLayerDir, 0o755)
+		// Inject supervisor.
+		supervisorDst := filepath.Join(lokaLayerDir, "usr", "local", "bin", "loka-supervisor")
+		os.MkdirAll(filepath.Dir(supervisorDst), 0o755)
+		if supervisorSrc := m.findSupervisor(); supervisorSrc != "" {
+			copyFile(supervisorSrc, supervisorDst)
+			os.Chmod(supervisorDst, 0o755)
 		}
+		// Create busybox symlinks (for Alpine-based images).
+		os.MkdirAll(filepath.Join(lokaLayerDir, "bin"), 0o755)
+		os.MkdirAll(filepath.Join(lokaLayerDir, "sbin"), 0o755)
+		os.MkdirAll(filepath.Join(lokaLayerDir, "usr/bin"), 0o755)
+		for _, cmd := range []string{
+			"sh", "ash", "cat", "ls", "cp", "mv", "rm", "mkdir", "rmdir",
+			"echo", "printf", "test", "true", "false", "sleep", "date",
+			"grep", "sed", "awk", "sort", "uniq", "wc", "head", "tail",
+			"find", "xargs", "tr", "cut", "tee", "touch", "chmod", "chown",
+			"ln", "readlink", "basename", "dirname", "realpath",
+			"ps", "kill", "id", "whoami", "hostname", "uname", "env",
+			"mount", "umount", "mknod", "df", "du",
+			"tar", "gzip", "gunzip", "wget", "ping", "ip", "ifconfig", "route",
+		} {
+			os.Symlink("busybox", filepath.Join(lokaLayerDir, "bin", cmd))
+		}
+		for _, cmd := range []string{"init", "reboot", "halt", "ifconfig", "route", "ip"} {
+			os.Symlink("../bin/busybox", filepath.Join(lokaLayerDir, "sbin", cmd))
+		}
+		for _, cmd := range []string{"env", "test"} {
+			os.Symlink("../../bin/busybox", filepath.Join(lokaLayerDir, "usr/bin", cmd))
+		}
+		m.logger.Info("loka overlay layer created")
 	}
+	// Append loka layer on top.
+	layerDirs = append(layerDirs, lokaLayerDir)
+
+	// Calculate total size across all layers.
+	var totalSize int64
+	for _, ld := range layerDirs {
+		filepath.Walk(ld, func(_ string, info os.FileInfo, _ error) error {
+			if info != nil { totalSize += info.Size() }
+			return nil
+		})
+	}
+	img.SizeMB = totalSize / (1024 * 1024)
+
+	// RootfsPath = colon-separated layer dirs (bottom to top).
+	// The agent passes these to the VM as virtiofs mounts for overlayfs stacking.
+	img.RootfsPath = strings.Join(layerDirs, ":")
 
 	img.Status = loka.ImageStatusReady
 	m.logger.Info("image ready",
@@ -217,9 +223,238 @@ func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, erro
 		"reference", reference,
 		"size_mb", img.SizeMB,
 		"layers", len(img.Layers),
-		"warm_snapshot", img.SnapshotMem != "",
+		"rootfs", img.RootfsPath,
 	)
 	return img, nil
+}
+
+// extractTarToDir extracts a tar stream to a directory, handling whiteouts.
+// Hardlinks are deferred to ensure targets exist before linking.
+func extractTarToDir(r io.Reader, dir string) error {
+	tr := tar.NewReader(r)
+
+	type deferredLink struct {
+		oldname, newname string
+		isHard           bool
+	}
+	var links []deferredLink
+
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+
+		target := filepath.Join(dir, header.Name)
+		if !strings.HasPrefix(filepath.Clean(target), filepath.Clean(dir)) {
+			continue
+		}
+
+		// OCI whiteout files.
+		base := filepath.Base(header.Name)
+		if strings.HasPrefix(base, ".wh.") {
+			deleted := filepath.Join(filepath.Dir(target), strings.TrimPrefix(base, ".wh."))
+			os.RemoveAll(deleted)
+			continue
+		}
+
+		switch header.Typeflag {
+		case tar.TypeDir:
+			os.MkdirAll(target, os.FileMode(header.Mode)|0o755)
+		case tar.TypeReg:
+			os.MkdirAll(filepath.Dir(target), 0o755)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				continue
+			}
+			io.Copy(f, tr)
+			f.Close()
+		case tar.TypeSymlink:
+			os.MkdirAll(filepath.Dir(target), 0o755)
+			os.Remove(target) // Remove if exists (layer override).
+			os.Symlink(header.Linkname, target)
+		case tar.TypeLink:
+			// Defer hardlinks — target file may not be extracted yet.
+			links = append(links, deferredLink{
+				oldname: filepath.Join(dir, header.Linkname),
+				newname: target,
+				isHard:  true,
+			})
+		}
+	}
+
+	// Create deferred hardlinks.
+	for _, link := range links {
+		os.MkdirAll(filepath.Dir(link.newname), 0o755)
+		os.Remove(link.newname)
+		if err := os.Link(link.oldname, link.newname); err != nil {
+			// Fallback: copy the file if hardlink fails (cross-device, etc).
+			if src, e := os.Open(link.oldname); e == nil {
+				if dst, e := os.Create(link.newname); e == nil {
+					io.Copy(dst, src)
+					dst.Close()
+				}
+				src.Close()
+			}
+		}
+	}
+
+	return nil
+}
+
+// findSupervisor locates the loka-supervisor binary to inject into images.
+func (m *Manager) findSupervisor() string {
+	candidates := []string{
+		filepath.Join(m.dataDir, "bin", "loka-supervisor"),
+		"/usr/local/bin/loka-supervisor",
+	}
+	if self, err := os.Executable(); err == nil {
+		candidates = append([]string{filepath.Join(filepath.Dir(self), "loka-supervisor")}, candidates...)
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// createExt4FromDir creates an ext4 image from a directory.
+// Uses Lima shell on macOS (mkfs.ext4 not available natively).
+// Falls back to local mkfs.ext4 on Linux.
+func (m *Manager) createExt4FromDir(ctx context.Context, srcDir, dstPath string, contentSize int64) error {
+	// Size: content + 20% overhead for ext4 metadata, minimum 64MB.
+	sizeMB := (contentSize / (1024 * 1024)) * 12 / 10
+	if sizeMB < 64 {
+		sizeMB = 64
+	}
+	if sizeMB > 4096 {
+		sizeMB = 4096 // Cap at 4GB.
+	}
+
+	// Try local mkfs.ext4 first (Linux).
+	if _, err := exec.LookPath("mkfs.ext4"); err == nil {
+		return m.createExt4Local(ctx, srcDir, dstPath, sizeMB)
+	}
+
+	// macOS: use Lima shell.
+	if _, err := exec.LookPath("limactl"); err == nil {
+		return m.createExt4Lima(ctx, srcDir, dstPath, sizeMB)
+	}
+
+	return fmt.Errorf("no mkfs.ext4 or limactl available — cannot create ext4 image")
+}
+
+func (m *Manager) createExt4Local(ctx context.Context, srcDir, dstPath string, sizeMB int64) error {
+	// Create sparse file.
+	if err := exec.CommandContext(ctx, "dd", "if=/dev/zero", "of="+dstPath, "bs=1M", fmt.Sprintf("count=0"), fmt.Sprintf("seek=%d", sizeMB)).Run(); err != nil {
+		return fmt.Errorf("create sparse file: %w", err)
+	}
+	if err := exec.CommandContext(ctx, "mkfs.ext4", "-F", "-q", dstPath).Run(); err != nil {
+		return fmt.Errorf("mkfs.ext4: %w", err)
+	}
+	// Mount and copy.
+	mountDir, _ := os.MkdirTemp("", "loka-ext4-mount-*")
+	defer os.RemoveAll(mountDir)
+	if err := exec.CommandContext(ctx, "mount", "-o", "loop", dstPath, mountDir).Run(); err != nil {
+		return fmt.Errorf("mount: %w", err)
+	}
+	defer exec.CommandContext(ctx, "umount", mountDir).Run()
+	if err := exec.CommandContext(ctx, "cp", "-a", srcDir+"/.", mountDir+"/").Run(); err != nil {
+		return fmt.Errorf("cp: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) createExt4Lima(ctx context.Context, srcDir, dstPath string, sizeMB int64) error {
+	// Find a running Lima instance.
+	out, err := exec.CommandContext(ctx, "limactl", "list", "--format", "{{.Name}}").Output()
+	if err != nil {
+		return fmt.Errorf("limactl list: %w", err)
+	}
+	limaVM := ""
+	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if name != "" {
+			limaVM = name
+			break
+		}
+	}
+	if limaVM == "" {
+		return fmt.Errorf("no Lima VM available for ext4 creation")
+	}
+
+	// Lima host mounts are read-only. Work in Lima's /tmp:
+	// 1. tar source dir → pipe into Lima → extract in /tmp
+	// 2. Create ext4 in /tmp, mount, copy, unmount
+	// 3. cat ext4 from Lima → pipe to host dstPath
+	remoteDir := fmt.Sprintf("/tmp/loka-ext4-%d", os.Getpid())
+	remoteExt4 := remoteDir + "/rootfs.ext4"
+
+	// Pipe source dir into Lima.
+	tarCmd := exec.CommandContext(ctx, "tar", "cf", "-", "-C", srcDir, ".")
+	limaExtract := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--",
+		"bash", "-c", fmt.Sprintf("rm -rf %s && mkdir -p %s/src && tar xf - -C %s/src", remoteDir, remoteDir, remoteDir))
+	limaExtract.Stdin, _ = tarCmd.StdoutPipe()
+	if err := limaExtract.Start(); err != nil {
+		return fmt.Errorf("start lima extract: %w", err)
+	}
+	if err := tarCmd.Run(); err != nil {
+		return fmt.Errorf("tar source: %w", err)
+	}
+	if err := limaExtract.Wait(); err != nil {
+		return fmt.Errorf("lima extract: %w", err)
+	}
+
+	// Create ext4 in Lima.
+	script := fmt.Sprintf(`
+set -e
+dd if=/dev/zero of=%s bs=1M count=0 seek=%d 2>/dev/null
+mkfs.ext4 -F -q %s
+MOUNT=$(mktemp -d)
+sudo mount -o loop %s $MOUNT
+sudo cp -a %s/src/. $MOUNT/
+sudo umount $MOUNT
+rmdir $MOUNT
+`, remoteExt4, sizeMB, remoteExt4, remoteExt4, remoteDir)
+
+	if output, err := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "bash", "-c", script).CombinedOutput(); err != nil {
+		return fmt.Errorf("lima ext4 creation: %w: %s", err, string(output))
+	}
+
+	// Copy ext4 back to host.
+	catCmd := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "cat", remoteExt4)
+	outFile, err := os.Create(dstPath)
+	if err != nil {
+		return fmt.Errorf("create output: %w", err)
+	}
+	catCmd.Stdout = outFile
+	if err := catCmd.Run(); err != nil {
+		outFile.Close()
+		return fmt.Errorf("copy ext4 from lima: %w", err)
+	}
+	outFile.Close()
+
+	// Cleanup remote.
+	exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "rm", "-rf", remoteDir).Run()
+	return nil
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
 }
 
 // extractLayers parses a `docker save` tar archive and returns layer metadata.
@@ -439,10 +674,28 @@ func (m *Manager) ResolveLayerPackPath(ctx context.Context, imageID string) (str
 	return localPath, nil
 }
 
-// ResolveRootfsPath is an alias for ResolveLayerPackPath, maintaining backward
-// compatibility for callers that reference the rootfs path.
+// ResolveRootfsPath returns the local rootfs directory for an image.
+// With crane-based pull, this is a plain directory (not ext4).
 func (m *Manager) ResolveRootfsPath(ctx context.Context, imageID string) (string, error) {
-	return m.ResolveLayerPackPath(ctx, imageID)
+	img, ok := m.images[imageID]
+	if !ok {
+		return "", fmt.Errorf("image %s not found", imageID)
+	}
+	if img.RootfsPath == "" {
+		return "", fmt.Errorf("rootfs not found for image %s", imageID)
+	}
+	// Layered rootfs: colon-separated layer dirs. Verify first layer exists.
+	if strings.Contains(img.RootfsPath, ":") {
+		first := strings.SplitN(img.RootfsPath, ":", 2)[0]
+		if _, err := os.Stat(first); err == nil {
+			return img.RootfsPath, nil
+		}
+		return "", fmt.Errorf("rootfs layer not found: %s", first)
+	}
+	if _, err := os.Stat(img.RootfsPath); err == nil {
+		return img.RootfsPath, nil
+	}
+	return "", fmt.Errorf("rootfs not found for image %s", imageID)
 }
 
 // ResolveSnapshotPaths returns local cache paths for an image's warm snapshot
@@ -488,54 +741,44 @@ func (m *Manager) createWarmSnapshot(ctx context.Context, img *loka.Image, layer
 
 	m.logger.Info("creating warm snapshot", "image", img.ID, "tmp_vm", tmpID)
 
-	// Boot the temporary VM using the layer-pack as rootfs.
-	microVM, err := m.vmManager.Launch(ctx, tmpID, vm.VMConfig{
-		VCPU:       1,
-		MemoryMB:   512,
-		RootfsPath: layerPackPath,
-	})
-	if err != nil {
-		return "", "", fmt.Errorf("launch temp VM: %w", err)
+	// Boot a temporary VM using the lokavm hypervisor.
+	if _, cerr := m.hypervisor.CreateVM(lokavm.VMConfig{
+		ID:          tmpID,
+		VCPUsMin:    1,
+		VCPUsMax:    1,
+		MemoryMinMB: 128,
+		MemoryMaxMB: 512,
+		BootArgs:    "console=hvc0 init=/usr/local/bin/loka-supervisor",
+		Vsock:       true,
+	}); cerr != nil {
+		return "", "", fmt.Errorf("create temp VM: %w", cerr)
 	}
-	// Always clean up the temporary VM.
-	defer m.vmManager.Stop(tmpID)
+	defer m.hypervisor.DeleteVM(tmpID)
 
-	// Wait for supervisor to become ready via vsock ping.
-	vsock := vm.NewVsockClient(microVM.VsockPath)
-	backoff := 100 * time.Millisecond
-	supervisorReady := false
-	for i := 0; i < 50; i++ {
-		if err := vsock.Ping(); err == nil {
-			supervisorReady = true
-			break
-		}
-		time.Sleep(backoff)
-		if backoff < 2*time.Second {
-			backoff = time.Duration(float64(backoff) * 1.5)
-		}
-	}
-	if !supervisorReady {
-		return "", "", fmt.Errorf("supervisor did not respond to ping within timeout")
+	if err := m.hypervisor.StartVM(tmpID); err != nil {
+		return "", "", fmt.Errorf("start temp VM: %w", err)
 	}
 
-	m.logger.Info("supervisor ready, creating diff snapshot", "image", img.ID)
+	m.logger.Info("temp VM started, creating snapshot", "image", img.ID)
 
-	// Create diff snapshot (pauses the VM).
-	memPath, statePath, err := m.vmManager.CreateDiffSnapshot(tmpID)
+	// Create snapshot (pauses the VM).
+	snap, err := m.hypervisor.CreateSnapshot(tmpID)
 	if err != nil {
 		return "", "", fmt.Errorf("create diff snapshot: %w", err)
 	}
 
-	// Compress and upload memory file.
-	memKey = fmt.Sprintf("images/%s/snapshot_mem.gz", img.ID)
-	if err := m.gzipUpload(ctx, memPath, imageBucket, memKey); err != nil {
-		return "", "", fmt.Errorf("upload snapshot mem: %w", err)
+	// Upload snapshot files if they exist.
+	if snap.MemPath != "" {
+		memKey = fmt.Sprintf("images/%s/snapshot_mem.gz", img.ID)
+		if err := m.gzipUpload(ctx, snap.MemPath, imageBucket, memKey); err != nil {
+			return "", "", fmt.Errorf("upload snapshot mem: %w", err)
+		}
 	}
-
-	// Compress and upload vmstate file.
-	stateKey = fmt.Sprintf("images/%s/snapshot_vmstate.gz", img.ID)
-	if err := m.gzipUpload(ctx, statePath, imageBucket, stateKey); err != nil {
-		return "", "", fmt.Errorf("upload snapshot vmstate: %w", err)
+	if snap.StatePath != "" {
+		stateKey = fmt.Sprintf("images/%s/snapshot_vmstate.gz", img.ID)
+		if err := m.gzipUpload(ctx, snap.StatePath, imageBucket, stateKey); err != nil {
+			return "", "", fmt.Errorf("upload snapshot vmstate: %w", err)
+		}
 	}
 
 	return memKey, stateKey, nil

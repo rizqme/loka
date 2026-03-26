@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -19,14 +21,17 @@ import (
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/objstore"
 	"github.com/vyprai/loka/internal/worker/vm"
+	"github.com/vyprai/loka/pkg/lokavm"
 )
 
-// Agent is the worker-side agent that manages Firecracker microVMs.
-// There are NO direct process executions — everything goes through a VM.
+// Agent is the worker-side agent that manages microVMs.
+// Uses lokavm.Hypervisor (Apple VZ on macOS, Go KVM on Linux).
+// Falls back to lokavm vm.Manager if hypervisor is not set.
 type Agent struct {
 	id       string
 	hostname string
 	provider string
+	dataDir  string
 	labels   map[string]string
 	logger   *slog.Logger
 
@@ -34,8 +39,18 @@ type Agent struct {
 	sessions      map[string]*SessionState
 	overlay       *vm.OverlayManager
 	checkpointMgr *CheckpointManager
-	vmManager     *vm.Manager
+	hypervisor    lokavm.Hypervisor
 	objStore      objstore.ObjectStore
+
+	// Warm boot cache: image ref → snapshot for instant VM restore.
+	warmMu    sync.RWMutex
+	warmCache map[string]*warmSnapshot
+}
+
+type warmSnapshot struct {
+	imageRef string
+	snapshot lokavm.Snapshot
+	vmID     string // The paused VM ID to clone from.
 }
 
 // ServiceLaunchOpts holds options for launching a service VM.
@@ -59,56 +74,51 @@ type ServiceLaunchOpts struct {
 	HealthPath          string // HTTP path for health check (empty = TCP only).
 }
 
-// SessionState tracks a running session backed by a Firecracker microVM.
+// SessionState tracks a running session backed by a microVM.
 type SessionState struct {
 	ID       string
 	Mode     loka.ExecMode
 	Policy   loka.ExecPolicy
-	VM       *vm.MicroVM     // Firecracker VM instance.
-	Vsock    *vm.VsockClient // vsock connection to supervisor inside VM.
+	VM       *lokavm.VM       // lokavm VM instance.
+	Vsock    *vm.VsockClient  // vsock connection to supervisor inside VM.
 	LayerMap map[string]string
-	GuestIP  string // VM guest IP for direct TCP access (e.g. "172.16.0.14").
 
 	// Port forwarding: local TCP listener that tunnels to VM via vsock.
 	PortForwardListener net.Listener
 	ForwardedPort       int // Local port assigned to the port forward listener.
 
 	// App-level warm snapshot paths (per-service, includes running app).
-	AppSnapshotMem   string // Local path to app-level memory snapshot.
-	AppSnapshotState string // Local path to app-level vmstate snapshot.
+	AppSnapshotMem   string
+	AppSnapshotState string
 }
 
-// NewAgent creates a new worker agent with Firecracker VM management.
-func NewAgent(provider string, labels map[string]string, dataDir string, objStore objstore.ObjectStore, fcConfig vm.FirecrackerConfig, logger *slog.Logger) (*Agent, error) {
+// NewAgent creates a new worker agent with lokavm hypervisor.
+func NewAgent(provider string, labels map[string]string, dataDir string, objStore objstore.ObjectStore, hypervisor lokavm.Hypervisor, logger *slog.Logger) (*Agent, error) {
 	hostname, _ := os.Hostname()
 	overlay := vm.NewOverlayManager(dataDir)
 	cpMgr := NewCheckpointManager(overlay, objStore, logger)
-
-	vmMgr, err := vm.NewManager(fcConfig, logger)
-	if err != nil {
-		return nil, fmt.Errorf("init VM manager: %w", err)
-	}
 
 	return &Agent{
 		id:            uuid.New().String(),
 		hostname:      hostname,
 		provider:      provider,
+		dataDir:       dataDir,
 		labels:        labels,
 		logger:        logger,
 		sessions:      make(map[string]*SessionState),
 		overlay:       overlay,
 		checkpointMgr: cpMgr,
-		vmManager:     vmMgr,
+		hypervisor:    hypervisor,
 		objStore:      objStore,
+		warmCache:     make(map[string]*warmSnapshot),
 	}, nil
 }
 
 // ID returns the agent's unique identifier.
 func (a *Agent) ID() string { return a.id }
 
-// VMManager returns the underlying VM manager, allowing callers to use it
-// for warm snapshot creation (e.g., the image manager in local mode).
-func (a *Agent) VMManager() *vm.Manager { return a.vmManager }
+// Hypervisor returns the lokavm hypervisor.
+func (a *Agent) Hypervisor() lokavm.Hypervisor { return a.hypervisor }
 
 // ObjStore returns the object store used by the agent.
 func (a *Agent) ObjStore() objstore.ObjectStore { return a.objStore }
@@ -147,7 +157,7 @@ type LaunchOpts struct {
 	Mounts              []loka.Volume // Volume mounts for the session.
 }
 
-// LaunchSession starts a Firecracker microVM for this session.
+// LaunchSession starts a lokavm microVM for this session.
 func (a *Agent) LaunchSession(ctx context.Context, sessionID string, opts LaunchOpts) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -166,94 +176,178 @@ func (a *Agent) LaunchSession(ctx context.Context, sessionID string, opts Launch
 	mem := opts.MemoryMB
 	if mem == 0 { mem = 512 }
 
-	// Prepare block-mode mount drives (ext4 images for readonly volumes).
-	var mountDrives []vm.MountDrive
-	blockBuilder := NewBlockMountBuilder(a.objStore, a.vmManager.DataDir(), a.logger)
-
-	for _, mount := range opts.Mounts {
-		if mount.EffectiveMode() != "block" {
-			continue
-		}
-		result, err := blockBuilder.BuildImage(ctx, sessionID, mount)
-		if err != nil {
-			a.logger.Warn("failed to build block mount image — skipping mount",
-				"path", mount.Path, "error", err)
-			continue
-		}
-		mountDrives = append(mountDrives, result.Drive)
+	if a.hypervisor == nil {
+		return fmt.Errorf("no hypervisor available")
 	}
 
-	// Launch Firecracker microVM — uses warm snapshot if available (~28ms),
-	// otherwise cold boots (~1-2s).
-	microVM, err := a.vmManager.Launch(ctx, sessionID, vm.VMConfig{
-		VCPU:                vcpu,
-		MemoryMB:            mem,
-		RootfsPath:          opts.RootfsPath,
-		LayerPackPath:       opts.LayerPackPath,
-		SnapshotMemPath:     opts.SnapshotMemPath,
-		SnapshotVMStatePath: opts.SnapshotVMStatePath,
-		MountDrives:         mountDrives,
-	})
+
+	// Resolve rootfs: directory (crane-extracted) or ext4 file.
+	rootfs := opts.RootfsPath
+	if rootfs == "" {
+		defaultRootfs := filepath.Join(a.dataDir, "rootfs", "rootfs.ext4")
+		if _, err := os.Stat(defaultRootfs); err == nil {
+			rootfs = defaultRootfs
+		}
+	}
+
+	// Detect rootfs type:
+	// - colon-separated paths = layered dirs (Docker layers, stacked via overlayfs)
+	// - single directory = virtiofs direct
+	// - single file = ext4 block device
+	isLayered := strings.Contains(rootfs, ":")
+	isDir := false
+	if !isLayered {
+		if info, err := os.Stat(rootfs); err == nil && info.IsDir() {
+			isDir = true
+		}
+	}
+
+	vmCfg := lokavm.VMConfig{
+		ID:          sessionID,
+		VCPUsMin:    vcpu,
+		VCPUsMax:    vcpu,
+		MemoryMinMB: mem / 4,
+		MemoryMaxMB: mem,
+		Vsock:       true,
+	}
+
+	if isLayered {
+		// Docker-style layered rootfs: each layer is a virtiofs mount (read-only).
+		// Initramfs stacks all layers via overlayfs + tmpfs upper (ephemeral).
+		// No copies — all VMs share the same layer directories.
+		layers := strings.Split(rootfs, ":")
+		var layerTags []string
+		for i, layerPath := range layers {
+			tag := fmt.Sprintf("layer-%d", i)
+			vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
+				Tag: tag, HostPath: layerPath, GuestPath: "/", ReadOnly: true,
+			})
+			layerTags = append(layerTags, tag)
+		}
+		// Boot args: tell initramfs the number of layers to stack.
+		// Each layer is a virtiofs tag "layer-N" (mounted by initramfs).
+		vmCfg.BootArgs = fmt.Sprintf("console=hvc0 loka.nlayers=%d", len(layerTags))
+	} else if isDir {
+		// Single directory rootfs — virtiofs direct (for default rootfs).
+		vmCfg.BootArgs = "console=hvc0 rootfstype=virtiofs root=rootfs rw init=/usr/local/bin/loka-supervisor"
+		vmCfg.SharedDirs = append(vmCfg.SharedDirs,
+			lokavm.SharedDir{Tag: "rootfs", HostPath: rootfs, GuestPath: "/", ReadOnly: false},
+		)
+	} else if rootfs != "" {
+		// ext4 block device.
+		vmCfg.BootArgs = "console=hvc0 root=/dev/vda rw init=/usr/local/bin/loka-supervisor"
+		vmCfg.Drives = append(vmCfg.Drives, lokavm.Drive{
+			ID: "rootfs", Path: rootfs, ReadOnly: false,
+		})
+	} else {
+		vmCfg.BootArgs = "console=hvc0"
+	}
+
+	// User-specified shared directories via virtiofs.
+	// Each mount is passed as a virtiofs device + kernel arg for the initramfs to mount.
+	for i, mount := range opts.Mounts {
+		if mount.HostPath != "" {
+			tag := fmt.Sprintf("mount-%d", i)
+			vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
+				Tag:       tag,
+				HostPath:  mount.HostPath,
+				GuestPath: mount.Path,
+				ReadOnly:  mount.IsReadOnly(),
+			})
+			vmCfg.BootArgs += fmt.Sprintf(" loka.virtiofs=%s:%s", tag, mount.Path)
+		}
+	}
+
+	hvVM, err := a.hypervisor.CreateVM(vmCfg)
 	if err != nil {
-		return fmt.Errorf("launch VM: %w", err)
+		return fmt.Errorf("create VM: %w", err)
+	}
+	if err := a.hypervisor.StartVM(sessionID); err != nil {
+		return fmt.Errorf("start VM: %w", err)
 	}
 
-	// Connect to the supervisor inside the VM via vsock.
-	vsock := vm.NewVsockClient(microVM.VsockPath)
+	vsockClient := vm.NewVsockClientFromDialer(hvVM.DialVsock)
 
-	// Wait for supervisor to be ready with exponential backoff.
-	backoff := 100 * time.Millisecond
-	for i := 0; i < 50; i++ {
-		if err := vsock.Ping(); err == nil {
+	// Wait for supervisor to be ready — prewarm the vsock connection.
+	backoff := 50 * time.Millisecond
+	for i := 0; i < 60; i++ {
+		if err := vsockClient.Ping(); err == nil {
 			break
 		}
 		time.Sleep(backoff)
-		if backoff < 2*time.Second {
-			backoff = time.Duration(float64(backoff) * 1.5)
+		if backoff < 1*time.Second {
+			backoff = time.Duration(float64(backoff) * 1.3)
 		}
 	}
 
-	// Send exec policy and mode to the supervisor.
-	vsock.SetPolicy(opts.Policy)
-	vsock.SetMode(opts.Mode)
-
-	// Mount volumes inside the VM via supervisor RPCs.
-	for _, mount := range opts.Mounts {
-		mode := mount.EffectiveMode()
-		mountReq := vm.MountVolumeRequest{
-			Path:     mount.Path,
-			Mode:     mode,
-			ReadOnly: mount.IsReadOnly(),
-			Bucket:   mount.Bucket,
-			Prefix:   mount.Prefix,
-		}
-		if err := vsock.MountVolume(mountReq); err != nil {
-			a.logger.Warn("failed to mount volume — continuing without mount",
-				"path", mount.Path, "mode", mode, "error", err)
-		} else {
-			a.logger.Info("volume mounted in VM",
-				"path", mount.Path, "mode", mode, "readOnly", mount.IsReadOnly())
-		}
-	}
+	vsockClient.SetPolicy(opts.Policy)
+	vsockClient.SetMode(opts.Mode)
 
 	a.sessions[sessionID] = &SessionState{
 		ID:       sessionID,
 		Mode:     opts.Mode,
 		Policy:   opts.Policy,
-		VM:       microVM,
-		Vsock:    vsock,
-		GuestIP:  microVM.GuestIP,
+		VM:       hvVM,
+		Vsock:    vsockClient,
 		LayerMap: make(map[string]string),
 	}
 
-	a.logger.Info("session launched with Firecracker VM",
-		"session", sessionID,
-		"vm_pid", microVM.PID,
-		"guest_ip", microVM.GuestIP,
-		"mode", opts.Mode,
-		"warm_snapshot", opts.SnapshotMemPath != "",
-	)
+	a.logger.Info("session launched", "session", sessionID, "mode", opts.Mode)
 	return nil
+}
+
+// cloneDir creates a copy of src directory at dst.
+// On macOS APFS, uses `cp -c` for instant copy-on-write clones.
+func cloneDir(src, dst string) error {
+	os.MkdirAll(filepath.Dir(dst), 0o755)
+	// Try APFS clone first (instant, zero disk until writes).
+	if err := exec.Command("cp", "-ac", src, dst).Run(); err == nil {
+		return nil
+	}
+	// Fallback: regular copy.
+	return exec.Command("cp", "-a", src, dst).Run()
+}
+
+// findSupervisorBinary locates the loka-supervisor binary to inject into VMs.
+func (a *Agent) findSupervisorBinary() string {
+	candidates := []string{
+		filepath.Join(a.dataDir, "bin", "loka-supervisor"),
+		"/usr/local/bin/loka-supervisor",
+	}
+	// Check sibling of lokad binary.
+	if self, err := os.Executable(); err == nil {
+		candidates = append([]string{filepath.Join(filepath.Dir(self), "loka-supervisor")}, candidates...)
+	}
+	for _, p := range candidates {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
+
+// copyFileSimple copies a file from src to dst.
+func copyFileSimple(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, in)
+	return err
+}
+
+func (a *Agent) stopVM(id string) {
+	if a.hypervisor != nil {
+		a.hypervisor.StopVM(id)
+	}
+	// Clean up per-session rootfs clone.
+	os.RemoveAll(filepath.Join(a.dataDir, "vms", id))
 }
 
 // WorkspacePath returns the workspace path for a session.
@@ -278,7 +372,7 @@ func (a *Agent) StopSession(sessionID string) error {
 	delete(a.sessions, sessionID)
 	a.mu.Unlock()
 
-	a.vmManager.Stop(sessionID)
+	a.stopVM(sessionID)
 	a.logger.Info("session stopped", "session", sessionID)
 	return nil
 }
@@ -459,7 +553,7 @@ func (a *Agent) DiffCheckpoints(sessionID, cpIDA, cpIDB string) ([]vm.DiffEntry,
 
 // ── Service Process Methods ──────────────────────────────
 
-// LaunchService boots a Firecracker VM for a service, optionally extracts a
+// LaunchService boots a lokavm VM for a service, optionally extracts a
 // bundle from the object store, and starts the long-running service process.
 // The VM is tracked in the sessions map keyed by serviceID so that
 // StopService / ServiceStatus / ServiceLogs can find it.
@@ -485,48 +579,63 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		mem = 512
 	}
 
-	// Prepare block-mode mount drives (ext4 images populated from objstore).
-	var mountDrives []vm.MountDrive
-	var blockSyncStoppers []func()
-	blockBuilder := NewBlockMountBuilder(a.objStore, a.vmManager.DataDir(), a.logger)
-
-	for _, mount := range opts.Mounts {
-		if mount.EffectiveMode() != "block" {
-			continue
-		}
-		result, err := blockBuilder.BuildImage(ctx, serviceID, mount)
-		if err != nil {
-			a.logger.Warn("failed to build block mount image — skipping mount",
-				"path", mount.Path, "error", err)
-			continue
-		}
-		mountDrives = append(mountDrives, result.Drive)
-		blockSyncStoppers = append(blockSyncStoppers, result.StopSync)
+	if a.hypervisor == nil {
+		return fmt.Errorf("no hypervisor available")
 	}
 
-	// Launch Firecracker microVM — uses warm snapshot if available (~28ms),
-	// otherwise cold boots (~1-2s).
-	microVM, err := a.vmManager.Launch(ctx, serviceID, vm.VMConfig{
-		VCPU:                vcpu,
-		MemoryMB:            mem,
-		RootfsPath:          opts.RootfsPath,
-		LayerPackPath:       opts.LayerPackPath,
-		SnapshotMemPath:     opts.SnapshotMemPath,
-		SnapshotVMStatePath: opts.SnapshotVMStatePath,
-		MountDrives:         mountDrives,
-	})
+	rootfs := opts.RootfsPath
+	rootfsIsDir := false
+	if info, err := os.Stat(rootfs); err == nil && info.IsDir() {
+		rootfsIsDir = true
+	}
+
+	vmCfg := lokavm.VMConfig{
+		ID:          serviceID,
+		VCPUsMin:    vcpu,
+		VCPUsMax:    vcpu,
+		MemoryMinMB: mem / 4,
+		MemoryMaxMB: mem,
+		Vsock:       true,
+	}
+
+	if rootfsIsDir {
+		vmCfg.BootArgs = "console=hvc0 rootfstype=virtiofs root=rootfs rw init=/usr/local/bin/loka-supervisor"
+		vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
+			Tag: "rootfs", HostPath: rootfs, GuestPath: "/", ReadOnly: false,
+		})
+	} else if rootfs != "" {
+		vmCfg.BootArgs = "console=hvc0 root=/dev/vda rw init=/usr/local/bin/loka-supervisor"
+		vmCfg.Drives = append(vmCfg.Drives, lokavm.Drive{
+			ID: "rootfs", Path: rootfs, ReadOnly: false,
+		})
+	} else {
+		vmCfg.BootArgs = "console=hvc0"
+	}
+
+	for i, mount := range opts.Mounts {
+		if mount.HostPath != "" {
+			tag := fmt.Sprintf("mount-%d", i)
+			vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
+				Tag:       tag,
+				HostPath:  mount.HostPath,
+				GuestPath: mount.Path,
+				ReadOnly:  mount.IsReadOnly(),
+			})
+			vmCfg.BootArgs += fmt.Sprintf(" loka.virtiofs=%s:%s", tag, mount.Path)
+		}
+	}
+
+	hvVM, err := a.hypervisor.CreateVM(vmCfg)
 	if err != nil {
-		// Stop any sync goroutines if VM launch failed.
-		for _, stop := range blockSyncStoppers {
-			stop()
-		}
-		return fmt.Errorf("launch VM: %w", err)
+		return fmt.Errorf("create VM: %w", err)
+	}
+	if err := a.hypervisor.StartVM(serviceID); err != nil {
+		return fmt.Errorf("start VM: %w", err)
 	}
 
-	// Connect to the supervisor inside the VM via vsock.
-	vsockClient := vm.NewVsockClient(microVM.VsockPath)
+	vsockClient := vm.NewVsockClientFromDialer(hvVM.DialVsock)
 
-	// Wait for supervisor to be ready with exponential backoff.
+	// Wait for supervisor to be ready.
 	backoff := 100 * time.Millisecond
 	for i := 0; i < 50; i++ {
 		if err := vsockClient.Ping(); err == nil {
@@ -538,58 +647,24 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		}
 	}
 
-	// Mount volumes inside the VM via supervisor RPCs.
-	for _, mount := range opts.Mounts {
-		mode := mount.EffectiveMode()
-		mountReq := vm.MountVolumeRequest{
-			Path:     mount.Path,
-			Mode:     mode,
-			ReadOnly: mount.IsReadOnly(),
-			Bucket:   mount.Bucket,
-			Prefix:   mount.Prefix,
-		}
-		if err := vsockClient.MountVolume(mountReq); err != nil {
-			a.logger.Warn("failed to mount volume — continuing without mount",
-				"path", mount.Path, "mode", mode, "error", err)
-		} else {
-			a.logger.Info("volume mounted in VM",
-				"path", mount.Path, "mode", mode, "readOnly", mount.IsReadOnly())
-		}
-	}
-
-	// If restoring from an app snapshot, the app is already running inside
-	// the VM. Skip bundle extraction and service_start — just set up port
-	// forwarding.
 	if opts.IsAppSnapshotRestore {
 		a.mu.Lock()
 		a.sessions[serviceID] = &SessionState{
 			ID:       serviceID,
-			VM:       microVM,
+			VM:       hvVM,
 			Vsock:    vsockClient,
-			GuestIP:  microVM.GuestIP,
 			LayerMap: make(map[string]string),
 		}
 		a.mu.Unlock()
 
 		if opts.Port > 0 {
-			localPort, err := a.StartPortForward(serviceID, opts.Port)
-			if err != nil {
-				a.logger.Warn("port forward failed after app snapshot restore",
-					"service", serviceID, "error", err)
-			} else {
+			if localPort, err := a.StartPortForward(serviceID, opts.Port); err == nil {
 				a.logger.Info("service restored from app snapshot",
-					"service", serviceID,
-					"vm_pid", microVM.PID,
-					"forward_port", localPort,
-				)
+					"service", serviceID, "forward_port", localPort)
 				return nil
 			}
 		}
-
-		a.logger.Info("service restored from app snapshot",
-			"service", serviceID,
-			"vm_pid", microVM.PID,
-		)
+		a.logger.Info("service restored from app snapshot", "service", serviceID)
 		return nil
 	}
 
@@ -606,7 +681,7 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 	// Extract bundle into the VM if a BundleKey is provided and no volume covers /workspace.
 	if !hasBundleVolume && opts.BundleKey != "" && a.objStore != nil {
 		if err := a.extractBundle(ctx, vsockClient, opts.BundleKey, opts.Workdir); err != nil {
-			a.vmManager.Stop(serviceID)
+			a.stopVM(serviceID)
 			return fmt.Errorf("extract bundle: %w", err)
 		}
 	}
@@ -617,7 +692,7 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		restartPolicy = "on-failure"
 	}
 	if _, err := vsockClient.ServiceStart(opts.Command, opts.Args, opts.Env, opts.Workdir, restartPolicy); err != nil {
-		a.vmManager.Stop(serviceID)
+		a.stopVM(serviceID)
 		return fmt.Errorf("start service: %w", err)
 	}
 
@@ -625,34 +700,21 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 	a.mu.Lock()
 	a.sessions[serviceID] = &SessionState{
 		ID:       serviceID,
-		VM:       microVM,
+		VM:       hvVM,
 		Vsock:    vsockClient,
-		GuestIP:  microVM.GuestIP,
 		LayerMap: make(map[string]string),
 	}
 	a.mu.Unlock()
 
-	// Start port forwarding so the domain proxy can reach the service
-	// inside the VM via a local TCP port tunnelled through vsock.
 	if opts.Port > 0 {
 		localPort, err := a.StartPortForward(serviceID, opts.Port)
 		if err != nil {
-			a.logger.Warn("port forward failed, service still running",
-				"service", serviceID, "error", err)
+			a.logger.Warn("port forward failed", "service", serviceID, "error", err)
 		} else {
-			a.logger.Info("service launched with Firecracker VM",
-				"service", serviceID,
-				"vm_pid", microVM.PID,
-				"command", opts.Command,
-				"forward_port", localPort,
-			)
+			a.logger.Info("service launched", "service", serviceID, "command", opts.Command, "forward_port", localPort)
 		}
 	} else {
-		a.logger.Info("service launched with Firecracker VM",
-			"service", serviceID,
-			"vm_pid", microVM.PID,
-			"command", opts.Command,
-		)
+		a.logger.Info("service launched", "service", serviceID, "command", opts.Command)
 	}
 
 	// Poll health check and take app snapshot when healthy.
@@ -678,29 +740,16 @@ func (a *Agent) waitHealthyAndSnapshot(serviceID string, port int, healthPath st
 		if err := sess.Vsock.HealthCheck(port, healthPath); err == nil {
 			// App is ready — take app snapshot.
 			a.logger.Info("app healthy, creating app snapshot", "service", serviceID)
-			memPath, statePath, err := a.vmManager.CreateDiffSnapshot(serviceID)
+			if a.hypervisor == nil { return }
+			snap, err := a.hypervisor.CreateSnapshot(serviceID)
 			if err != nil {
 				a.logger.Warn("failed to create app snapshot", "service", serviceID, "error", err)
 				return
 			}
-
-			// Resume VM after snapshot (CreateDiffSnapshot leaves it paused).
-			if err := a.vmManager.Resume(serviceID); err != nil {
-				a.logger.Warn("failed to resume VM after app snapshot", "service", serviceID, "error", err)
+			if err := a.hypervisor.ResumeVM(serviceID); err != nil {
+				a.logger.Warn("failed to resume VM after snapshot", "service", serviceID, "error", err)
 			}
-
-			a.mu.Lock()
-			if s, ok := a.sessions[serviceID]; ok {
-				s.AppSnapshotMem = memPath
-				s.AppSnapshotState = statePath
-			}
-			a.mu.Unlock()
-
-			a.logger.Info("app snapshot created",
-				"service", serviceID,
-				"mem", memPath,
-				"state", statePath,
-			)
+			a.logger.Info("app snapshot created", "service", serviceID, "snapshot", snap)
 			return
 		}
 		time.Sleep(2 * time.Second)
@@ -969,7 +1018,7 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 	// lines without consuming bytes that belong to the raw TCP tunnel.
 	br := bufio.NewReader(vsockConn)
 
-	// Firecracker vsock handshake: CONNECT to port 52 (supervisor).
+	// lokavm vsock handshake: CONNECT to port 52 (supervisor).
 	if _, err := fmt.Fprintf(vsockConn, "CONNECT 52\n"); err != nil {
 		a.logger.Debug("port forward: vsock CONNECT failed", "error", err)
 		return
@@ -1049,15 +1098,10 @@ func (a *Agent) StopPortForward(sessionID string) {
 	}
 }
 
-// GetGuestIP returns the guest IP for a session's VM, or "" if not available.
+// GetGuestIP returns the guest IP for a session's VM.
+// With lokavm, vsock is used instead of TCP — returns empty.
 func (a *Agent) GetGuestIP(sessionID string) string {
-	a.mu.RLock()
-	sess, ok := a.sessions[sessionID]
-	a.mu.RUnlock()
-	if !ok {
-		return ""
-	}
-	return sess.GuestIP
+	return ""
 }
 
 // GetForwardedPort returns the local forwarded port for a session, or 0 if none.

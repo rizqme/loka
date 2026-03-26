@@ -14,7 +14,7 @@ type ImageLayer struct {
 // Image is a base image backed by a Docker/OCI container image.
 // It is pulled from a registry, saved with `docker save`, and its layers
 // are extracted, deduplicated, and combined into a layer-pack ext4 file
-// used as the read-only base for Firecracker microVMs.
+// used as the read-only base for lokavm microVMs.
 //
 // Flow:
 //   1. User specifies a Docker image: "ubuntu:22.04", "python:3.12-slim"
@@ -23,7 +23,7 @@ type ImageLayer struct {
 //   4. Each layer is extracted, hashed, and uploaded (deduplicated by digest)
 //   5. All layers are combined into a layer-pack ext4 (numbered /0/, /1/, ...)
 //   6. The loka-supervisor binary is injected into the top layer
-//   7. Optionally boots in Firecracker and creates a "warm snapshot"
+//   7. Optionally boots in lokavm and creates a "warm snapshot"
 //   8. Future sessions restore from this snapshot (~instant startup)
 //
 // The layer-pack is READ-ONLY. All session changes go to an overlay layer.

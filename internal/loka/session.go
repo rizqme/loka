@@ -48,7 +48,7 @@ var ValidSessionTransitions = map[SessionStatus][]SessionStatus{
 	SessionStatusIdle:        {SessionStatusRunning, SessionStatusTerminating, SessionStatusError},
 	SessionStatusPaused:      {SessionStatusRunning, SessionStatusTerminating, SessionStatusError},
 	SessionStatusTerminating: {SessionStatusTerminated, SessionStatusError},
-	SessionStatusError:       {SessionStatusTerminating},
+	SessionStatusError:       {SessionStatusTerminating, SessionStatusTerminated},
 }
 
 // CanTransitionTo checks if the session can transition to the given status.

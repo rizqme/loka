@@ -37,8 +37,8 @@ import (
 	localobjstore "github.com/vyprai/loka/internal/objstore/local"
 	s3objstore "github.com/vyprai/loka/internal/objstore/s3"
 	lokadns "github.com/vyprai/loka/internal/dns"
-	"github.com/vyprai/loka/internal/worker/vm"
 	"github.com/vyprai/loka/internal/provider"
+	"github.com/vyprai/loka/pkg/lokavm"
 	"github.com/vyprai/loka/pkg/tlsutil"
 
 	"google.golang.org/grpc/credentials"
@@ -163,8 +163,10 @@ func main() {
 		objStore = s
 	case "s3", "minio":
 		s, err := s3objstore.New(ctx, s3objstore.Config{
-			Region:   cfg.ObjectStore.Region,
-			Endpoint: cfg.ObjectStore.Endpoint,
+			Region:    cfg.ObjectStore.Region,
+			Endpoint:  cfg.ObjectStore.Endpoint,
+			AccessKey: cfg.ObjectStore.AccessKey,
+			SecretKey: cfg.ObjectStore.SecretKey,
 		})
 		if err != nil {
 			logger.Error("failed to create S3 object store", "error", err)
@@ -407,7 +409,7 @@ func main() {
 	providerRegistry.Register(provdo.New(provdo.Config{}, logger))
 	logger.Info("providers registered", "count", len(providerRegistry.List()))
 
-	// Initialize image manager (Docker images → Firecracker rootfs).
+	// Initialize image manager (Docker images → lokavm rootfs).
 	imgMgr := image.NewManager(objStore, cfg.DataDir, logger)
 
 	// Initialize worker registry.
@@ -484,15 +486,31 @@ func main() {
 	// Start embedded local worker unless running as control plane only.
 	var localWorker *controlplane.LocalWorker
 	if cfg.Role != "controlplane" {
-		fcConfig := vm.FirecrackerConfig{
-			BinaryPath: envOrDefault("LOKA_FIRECRACKER_BIN", "/usr/local/bin/firecracker"),
-			KernelPath: envOrDefault("LOKA_KERNEL_PATH", cfg.DataDir+"/kernel/vmlinux"),
-			RootfsPath: envOrDefault("LOKA_ROOTFS_PATH", cfg.DataDir+"/rootfs/rootfs.ext4"),
-			DataDir:    cfg.DataDir + "/worker-data",
-		}
 		dataDir := cfg.DataDir + "/worker-data"
+
+		// Initialize lokavm hypervisor (Apple VZ on macOS, KVM on Linux).
+		hvConfig := lokavm.HypervisorConfig{
+			KernelPath: envOrDefault("LOKA_KERNEL_PATH", cfg.DataDir+"/kernel/vmlinux"),
+			InitrdPath: envOrDefault("LOKA_INITRD_PATH", cfg.DataDir+"/kernel/initramfs.cpio.gz"),
+			DataDir:    dataDir,
+		}
+		// Try hypervisors: VZ (macOS) → Cloud Hypervisor (Linux) → KVM (Linux).
+		var hypervisor lokavm.Hypervisor
+		if vz, err := lokavm.NewHypervisor(hvConfig, logger); err == nil {
+			hypervisor = vz
+			logger.Info("using Apple VZ hypervisor", "dataDir", dataDir)
+		} else if ch, err := lokavm.NewCHHypervisor(hvConfig, logger); err == nil {
+			hypervisor = ch
+			logger.Info("using Cloud Hypervisor", "dataDir", dataDir)
+		} else if kvm, err := lokavm.NewKVMHypervisor(hvConfig, logger); err == nil {
+			hypervisor = kvm
+			logger.Info("using KVM hypervisor", "dataDir", dataDir)
+		} else {
+			logger.Warn("no hypervisor available (VM features disabled)")
+		}
+
 		var err error
-		localWorker, err = controlplane.NewLocalWorker(registry, sm, objStore, dataDir, fcConfig, logger)
+		localWorker, err = controlplane.NewLocalWorker(registry, sm, objStore, dataDir, hypervisor, logger)
 		if err != nil {
 			logger.Error("failed to create local worker", "error", err)
 			os.Exit(1)
@@ -500,10 +518,8 @@ func main() {
 		localWorker.SetStore(db)
 		localWorker.Start(ctx)
 
-		// Wire up the VM manager so the image manager can create warm snapshots
-		// (boot temp VM, wait for supervisor, snapshot, upload).
 		agent := localWorker.Agent()
-		imgMgr.SetVMManager(agent.VMManager())
+		imgMgr.SetHypervisor(agent.Hypervisor())
 
 		// Wire up service log retrieval through the embedded agent.
 		svcMgr.SetLogsFn(func(serviceID string, lines int) ([]string, []string, error) {

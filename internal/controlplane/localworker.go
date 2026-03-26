@@ -14,11 +14,11 @@ import (
 	"github.com/vyprai/loka/internal/objstore"
 	"github.com/vyprai/loka/internal/store"
 	"github.com/vyprai/loka/internal/worker"
-	"github.com/vyprai/loka/internal/worker/vm"
+	"github.com/vyprai/loka/pkg/lokavm"
 )
 
 // LocalWorker runs an embedded worker inside the control plane process.
-// Even in local mode, all execution goes through Firecracker microVMs.
+// All execution goes through lokavm microVMs.
 type LocalWorker struct {
 	agent          *worker.Agent
 	workerConn     *cpworker.WorkerConn
@@ -29,9 +29,9 @@ type LocalWorker struct {
 	wg             sync.WaitGroup
 }
 
-// NewLocalWorker creates and registers an embedded worker with Firecracker support.
-func NewLocalWorker(registry *cpworker.Registry, sm *session.Manager, objStore objstore.ObjectStore, dataDir string, fcConfig vm.FirecrackerConfig, logger *slog.Logger) (*LocalWorker, error) {
-	agent, err := worker.NewAgent("local", map[string]string{"embedded": "true"}, dataDir, objStore, fcConfig, logger)
+// NewLocalWorker creates and registers an embedded worker with lokavm hypervisor.
+func NewLocalWorker(registry *cpworker.Registry, sm *session.Manager, objStore objstore.ObjectStore, dataDir string, hypervisor lokavm.Hypervisor, logger *slog.Logger) (*LocalWorker, error) {
+	agent, err := worker.NewAgent("local", map[string]string{"embedded": "true"}, dataDir, objStore, hypervisor, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -73,9 +73,6 @@ func (lw *LocalWorker) SetStore(s store.Store) {
 // Start begins processing commands and sending heartbeats.
 func (lw *LocalWorker) Start(ctx context.Context) {
 	lw.logger.Info("local worker started", "id", lw.agent.ID())
-
-	// Start periodic TAP device cleanup to remove orphaned interfaces.
-	lw.agent.VMManager().StartTAPCleaner(ctx)
 
 	// Command processing loop.
 	lw.wg.Add(1)
@@ -144,6 +141,14 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 			Mounts:              data.Mounts,
 		}); err != nil {
 			lw.logger.Error("failed to launch session", "session", data.SessionID, "error", err)
+			// Mark session as error so API calls don't try to reach the worker.
+			if lw.store != nil {
+				if s, e := lw.store.Sessions().Get(ctx, data.SessionID); e == nil {
+					s.Status = loka.SessionStatusError
+					s.StatusMessage = err.Error()
+					lw.store.Sessions().Update(ctx, s)
+				}
+			}
 		}
 
 	case "stop_session":
@@ -263,6 +268,13 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 				HealthPath:           data.HealthPath,
 			}); err != nil {
 				lw.logger.Error("failed to launch service", "service", data.ServiceID, "error", err)
+				if lw.store != nil {
+					if svc, e := lw.store.Services().Get(ctx, data.ServiceID); e == nil {
+						svc.Status = loka.ServiceStatusError
+						svc.StatusMessage = err.Error()
+						lw.store.Services().Update(ctx, svc)
+					}
+				}
 				return
 			}
 			// Persist the guest IP and forwarded port so the domain proxy can route to the VM.
@@ -347,15 +359,16 @@ func (lw *LocalWorker) handleSnapshotService(ctx context.Context, serviceID stri
 	memPath, statePath := lw.agent.GetAppSnapshotPaths(serviceID)
 	if memPath == "" || statePath == "" {
 		// No existing snapshot — create one now.
-		var err error
-		memPath, statePath, err = lw.agent.VMManager().CreateDiffSnapshot(serviceID)
-		if err != nil {
-			lw.logger.Error("snapshot_service: failed to create snapshot",
-				"service", serviceID, "error", err)
-			// Still stop the service.
-			lw.agent.StopService(serviceID)
-			lw.agent.StopSession(serviceID)
-			return
+		if hv := lw.agent.Hypervisor(); hv != nil {
+			snap, err := hv.CreateSnapshot(serviceID)
+			if err != nil {
+				lw.logger.Error("snapshot_service: failed", "service", serviceID, "error", err)
+				lw.agent.StopService(serviceID)
+				lw.agent.StopSession(serviceID)
+				return
+			}
+			memPath = snap.MemPath
+			statePath = snap.StatePath
 		}
 	}
 

@@ -116,7 +116,6 @@ func TestCanTransitionTo_ExhaustiveInvalid(t *testing.T) {
 		{SessionStatusError, SessionStatusRunning},
 		{SessionStatusError, SessionStatusIdle},
 		{SessionStatusError, SessionStatusPaused},
-		{SessionStatusError, SessionStatusTerminated},
 	}
 
 	for _, tt := range invalid {

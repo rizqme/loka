@@ -147,18 +147,12 @@ func NewRaftCoordinator(cfg RaftConfig, logger *slog.Logger) (*RaftCoordinator, 
 		return nil, fmt.Errorf("create raft: %w", err)
 	}
 
-	// Bootstrap if this is the first node.
+	// Bootstrap if this is the first node (single-node cluster initially).
 	if cfg.Bootstrap {
 		servers := []raft.Server{{
 			ID:      raft.ServerID(cfg.NodeID),
 			Address: raft.ServerAddress(cfg.BindAddr),
 		}}
-		for _, peer := range cfg.Peers {
-			servers = append(servers, raft.Server{
-				ID:      raft.ServerID(peer),
-				Address: raft.ServerAddress(peer),
-			})
-		}
 		r.BootstrapCluster(raft.Configuration{Servers: servers})
 	}
 
@@ -169,8 +163,45 @@ func NewRaftCoordinator(cfg RaftConfig, logger *slog.Logger) (*RaftCoordinator, 
 		subscribers: make(map[string][]chan []byte),
 	}
 
+	// After becoming leader, auto-add configured peers as voters.
+	if cfg.Bootstrap && len(cfg.Peers) > 0 {
+		go coord.autoAddPeers(cfg.Peers)
+	}
+
+	// Non-bootstrap nodes: wait for leader to add us, then start participating.
 	logger.Info("raft coordinator started", "node_id", cfg.NodeID, "bind", cfg.BindAddr, "bootstrap", cfg.Bootstrap)
 	return coord, nil
+}
+
+// autoAddPeers waits until this node becomes leader, then adds each peer as
+// a voter. This enables a simple HA workflow: bootstrap node 1, start node 2
+// with peers pointing to node 1, and node 1 automatically adds node 2.
+func (c *RaftCoordinator) autoAddPeers(peers []string) {
+	// Wait for leader election.
+	for i := 0; i < 30; i++ {
+		if c.raft.State() == raft.Leader {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	if c.raft.State() != raft.Leader {
+		c.logger.Warn("not leader after 15s, skipping peer auto-add")
+		return
+	}
+
+	for _, peer := range peers {
+		// Use peer address as both ID and address (simple convention).
+		id := raft.ServerID(peer)
+		addr := raft.ServerAddress(peer)
+		c.logger.Info("auto-adding peer to cluster", "peer", peer)
+
+		f := c.raft.AddVoter(id, addr, 0, 15*time.Second)
+		if err := f.Error(); err != nil {
+			c.logger.Warn("failed to add peer", "peer", peer, "error", err)
+		} else {
+			c.logger.Info("peer added to cluster", "peer", peer)
+		}
+	}
 }
 
 // Lock acquires a distributed lock via Raft consensus.

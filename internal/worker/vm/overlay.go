@@ -15,7 +15,7 @@ import (
 
 // OverlayManager manages copy-on-write filesystem layers for session isolation.
 //
-// On Linux with Firecracker, this uses real overlayfs mounts.
+// On Linux with lokavm, this uses real overlayfs mounts.
 // For development on macOS, this uses directory-based COW simulation:
 //
 //	/data/sessions/<session-id>/

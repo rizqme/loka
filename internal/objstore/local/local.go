@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/vyprai/loka/internal/objstore"
@@ -77,10 +78,10 @@ func (s *Store) GetPresignedURL(_ context.Context, bucket, key string, _ time.Du
 func (s *Store) List(_ context.Context, bucket, prefix string) ([]objstore.ObjectInfo, error) {
 	const maxResults = 10000
 
-	dir := filepath.Join(s.root, bucket, prefix)
+	bucketDir := filepath.Join(s.root, bucket)
 	var objects []objstore.ObjectInfo
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.Walk(bucketDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return nil // Skip inaccessible paths.
 		}
@@ -90,7 +91,10 @@ func (s *Store) List(_ context.Context, bucket, prefix string) ([]objstore.Objec
 		if len(objects) >= maxResults {
 			return filepath.SkipAll
 		}
-		rel, _ := filepath.Rel(filepath.Join(s.root, bucket), path)
+		rel, _ := filepath.Rel(bucketDir, path)
+		if prefix != "" && !strings.HasPrefix(rel, prefix) {
+			return nil
+		}
 		objects = append(objects, objstore.ObjectInfo{
 			Key:          rel,
 			Size:         info.Size(),

@@ -3,15 +3,15 @@
 #  LOKA Installer
 #  Usage: curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 #
-#  On Linux:  installs binaries, Firecracker, kernel, configs
-#  On macOS:  installs CLI + sets up a Lima VM with KVM for LOKA
+#  On Linux:  installs binaries + Cloud Hypervisor + kernel + initramfs
+#  On macOS:  installs binaries (lokad uses Apple Virtualization Framework)
 # ──────────────────────────────────────────────────────────
 set -euo pipefail
 
 VERSION="${LOKA_VERSION:-latest}"
 INSTALL_DIR="${LOKA_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${LOKA_DATA_DIR:-/var/loka}"
-FC_VERSION="${FC_VERSION:-v1.10.1}"
+CH_VERSION="${CH_VERSION:-v44.0}"
 
 # ── Helpers ───────────────────────────────────────────────
 
@@ -41,13 +41,11 @@ setup_sudo() {
     return
   fi
 
-  # Check if we need sudo: install dir writable AND no existing binaries in protected paths.
   local needs_sudo=false
   if ! { [ -w "$INSTALL_DIR" ] || mkdir -p "$INSTALL_DIR" 2>/dev/null; }; then
     needs_sudo=true
   fi
-  # Also need sudo if existing binaries are in a non-writable location.
-  for bin in loka lokad loka-worker loka-supervisor; do
+  for bin in loka lokad loka-supervisor; do
     if [ -f "${INSTALL_DIR}/$bin" ] && [ ! -w "${INSTALL_DIR}/$bin" ]; then
       needs_sudo=true
       break
@@ -64,8 +62,6 @@ setup_sudo() {
       fail "sudo access required. Run with sudo or as root."
     fi
     SUDO="sudo"
-    # Keep sudo alive for the duration of the script.
-    # Re-prompt if sudo credential cache expires.
     (while true; do sudo -n true 2>/dev/null || sudo -v; sleep 50; done) &
     SUDO_KEEPALIVE_PID=$!
     trap 'kill $SUDO_KEEPALIVE_PID 2>/dev/null; wait $SUDO_KEEPALIVE_PID 2>/dev/null' EXIT
@@ -124,16 +120,15 @@ download_binaries() {
     git clone --depth 1 https://github.com/vyprai/loka "$tmp/loka-src" 2>/dev/null
     cd "$tmp/loka-src"
     GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/lokad" ./cmd/lokad
-    GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/loka-worker" ./cmd/loka-worker
     GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/loka-supervisor" ./cmd/loka-supervisor
     GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/loka" ./cmd/loka
     cd - >/dev/null
   fi
 
   if [ -n "$target_dir" ]; then
-    cp "$tmp"/{lokad,loka-worker,loka-supervisor,loka} "$target_dir/" 2>/dev/null || true
+    cp "$tmp"/{lokad,loka-supervisor,loka} "$target_dir/" 2>/dev/null || true
   else
-    local bins=("lokad" "loka-worker" "loka-supervisor" "loka")
+    local bins=("lokad" "loka-supervisor" "loka")
     for bin in "${bins[@]}"; do
       if [ -f "$tmp/$bin" ]; then
         $SUDO install -m 755 "$tmp/$bin" "${INSTALL_DIR}/$bin"
@@ -145,45 +140,63 @@ download_binaries() {
   rm -rf "$tmp"
 }
 
-# ── Install Firecracker (Linux only) ────────────────────
+# ── Install Cloud Hypervisor (Linux only) ────────────────
 
-install_firecracker() {
+install_cloud_hypervisor() {
   if [ "$OS" != "linux" ]; then
     return
   fi
 
-  info "Installing Firecracker ${FC_VERSION}"
+  info "Installing Cloud Hypervisor ${CH_VERSION}"
 
-  local fc_arch
-  case "$ARCH" in
-    amd64) fc_arch="x86_64" ;;
-    arm64) fc_arch="aarch64" ;;
-  esac
+  local ch_arch
+  ch_arch=$(uname -m)  # x86_64 or aarch64
 
   local tmp
   tmp=$(mktemp -d)
 
-  local fc_url="https://github.com/firecracker-microvm/firecracker/releases/download/${FC_VERSION}/firecracker-${FC_VERSION}-${fc_arch}.tgz"
+  local ch_url="https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/${CH_VERSION}/cloud-hypervisor-static-${ch_arch}"
 
-  curl -fsSL "$fc_url" | tar -xz -C "$tmp"
-  $SUDO install -m 755 "$tmp/release-${FC_VERSION}-${fc_arch}/firecracker-${FC_VERSION}-${fc_arch}" "${INSTALL_DIR}/firecracker"
-  ok "firecracker → ${INSTALL_DIR}/firecracker"
+  if curl -fsSL "$ch_url" -o "$tmp/cloud-hypervisor" 2>/dev/null; then
+    chmod +x "$tmp/cloud-hypervisor"
+    $SUDO install -m 755 "$tmp/cloud-hypervisor" "${INSTALL_DIR}/cloud-hypervisor"
+    ok "cloud-hypervisor → ${INSTALL_DIR}/cloud-hypervisor"
+  else
+    warn "Failed to download Cloud Hypervisor. Install manually:"
+    warn "  https://github.com/cloud-hypervisor/cloud-hypervisor/releases"
+  fi
 
   rm -rf "$tmp"
+}
 
-  # Fetch kernel.
-  local kernel_dir="${DATA_DIR}/kernel"
-  $SUDO mkdir -p "$kernel_dir"
+# ── Install VM assets (kernel + initramfs) ───────────────
 
-  local kernel_url="https://s3.amazonaws.com/spec.ccfc.min/ci-artifacts/kernels/${fc_arch}/vmlinux-5.10.bin"
-  info "Downloading Linux kernel..."
-  $SUDO curl -fsSL "$kernel_url" -o "${kernel_dir}/vmlinux"
-  ok "kernel → ${kernel_dir}/vmlinux"
+install_vm_assets() {
+  local vm_dir="$HOME/.loka/vm"
+  mkdir -p "$vm_dir"
 
-  # Also symlink to default dev path used by lokad.
-  local dev_kernel_dir="/tmp/loka-data/artifacts/kernel"
-  $SUDO mkdir -p "$dev_kernel_dir"
-  $SUDO ln -sf "${kernel_dir}/vmlinux" "$dev_kernel_dir/vmlinux" 2>/dev/null || true
+  info "Installing VM assets"
+
+  local kernel_url initrd_url
+  if [ "$VERSION" = "latest" ]; then
+    kernel_url="https://github.com/vyprai/loka/releases/latest/download/vmlinux-lokavm-${ARCH}"
+    initrd_url="https://github.com/vyprai/loka/releases/latest/download/initramfs-${ARCH}.cpio.gz"
+  else
+    kernel_url="https://github.com/vyprai/loka/releases/download/${VERSION}/vmlinux-lokavm-${ARCH}"
+    initrd_url="https://github.com/vyprai/loka/releases/download/${VERSION}/initramfs-${ARCH}.cpio.gz"
+  fi
+
+  if curl -fsSL "$kernel_url" -o "$vm_dir/vmlinux-lokavm" 2>/dev/null; then
+    ok "kernel → $vm_dir/vmlinux-lokavm"
+  else
+    warn "Kernel not found in release. Build from source: make kernel"
+  fi
+
+  if curl -fsSL "$initrd_url" -o "$vm_dir/initramfs.cpio.gz" 2>/dev/null; then
+    ok "initramfs → $vm_dir/initramfs.cpio.gz"
+  else
+    warn "Initramfs not found in release. Build from source: make kernel"
+  fi
 }
 
 # ── Install Linux dependencies ───────────────────────────
@@ -191,7 +204,6 @@ install_firecracker() {
 install_linux_deps() {
   info "Checking dependencies..."
 
-  # Detect package manager.
   local pkg=""
   if command -v apt-get &>/dev/null; then
     pkg="apt"
@@ -203,35 +215,24 @@ install_linux_deps() {
     pkg="apk"
   fi
 
-  # Packages we need.
   local missing=()
 
-  # iptables — needed for network policy enforcement inside VMs.
   if ! command -v iptables &>/dev/null; then
     missing+=("iptables")
   else
     ok "iptables"
   fi
 
-  # iproute2 (ip command) — needed for network setup.
   if ! command -v ip &>/dev/null; then
     missing+=("iproute2")
   else
     ok "iproute2"
   fi
 
-  # e2fsprogs (mkfs.ext4) — needed for rootfs creation.
-  if ! command -v mkfs.ext4 &>/dev/null; then
-    missing+=("e2fsprogs")
-  else
-    ok "e2fsprogs"
-  fi
-
   # KVM.
   if [ ! -e /dev/kvm ]; then
-    warn "/dev/kvm not found — Firecracker requires KVM"
+    warn "/dev/kvm not found — Cloud Hypervisor requires KVM"
     warn "Enable KVM or run inside a VM with nested virtualization"
-    # Try to load kvm module.
     $SUDO modprobe kvm 2>/dev/null || true
     $SUDO modprobe kvm_intel 2>/dev/null || $SUDO modprobe kvm_amd 2>/dev/null || true
     if [ -e /dev/kvm ]; then
@@ -239,14 +240,6 @@ install_linux_deps() {
     fi
   else
     ok "KVM available"
-  fi
-
-  # Docker — optional but recommended.
-  if command -v docker &>/dev/null; then
-    ok "Docker available"
-  else
-    warn "Docker not found — needed for 'loka image pull'"
-    info "Install Docker: https://docs.docker.com/engine/install/"
   fi
 
   # Install missing packages.
@@ -294,7 +287,10 @@ install_linux() {
   download_binaries
   echo ""
 
-  install_firecracker
+  install_cloud_hypervisor
+  echo ""
+
+  install_vm_assets
   echo ""
 
   # Data dirs.
@@ -344,44 +340,38 @@ YAML
   echo -e "${GREEN}${BOLD}  LOKA installed successfully!${NC}"
   echo ""
   echo -e "  Get started:"
-  echo -e "    ${CYAN}loka deploy local${NC}          Start the server"
+  echo -e "    ${CYAN}lokad${NC}                      Start the server"
   echo -e "    ${CYAN}loka session create${NC}        Create a session"
   echo -e "    ${CYAN}loka exec <id> -- echo hi${NC}  Run a command"
-  echo -e "    ${CYAN}loka deploy down${NC}           Stop"
   echo ""
 }
 
-# ── macOS install (lokavm) ────────────────────────────────
+# ── macOS install ────────────────────────────────────────
 
 install_macos() {
-  info "Installing LOKA for macOS (lokavm + VZ framework)"
+  info "Installing LOKA for macOS (Apple Virtualization Framework)"
 
-  # Step 1: Install the loka CLI locally (macOS binary).
   echo ""
-  info "Installing CLI to ${INSTALL_DIR}"
+  info "Installing binaries to ${INSTALL_DIR}"
   download_binaries
 
-  # Step 2: Download and install lokavm binary.
   echo ""
-  info "Installing lokavm"
+  install_vm_assets
 
-  local lokavm_url
-  if [ "$VERSION" = "latest" ]; then
-    lokavm_url="https://github.com/vyprai/loka/releases/latest/download/lokavm-darwin-${ARCH}"
-  else
-    lokavm_url="https://github.com/vyprai/loka/releases/download/${VERSION}/lokavm-darwin-${ARCH}"
+  # Sign lokad with VZ entitlement.
+  if [ -f "${INSTALL_DIR}/lokad" ]; then
+    echo ""
+    info "Signing lokad with virtualization entitlement"
+    local ent_file
+    ent_file=$(mktemp)
+    cat > "$ent_file" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>
+PLIST
+    codesign --entitlements "$ent_file" --force -s - "${INSTALL_DIR}/lokad" 2>/dev/null && ok "lokad signed" || warn "codesign failed — VZ may not work"
+    rm -f "$ent_file"
   fi
-
-  local tmp
-  tmp=$(mktemp -d)
-
-  if curl -fsSL "$lokavm_url" -o "$tmp/lokavm" 2>/dev/null; then
-    $SUDO install -m 755 "$tmp/lokavm" "${INSTALL_DIR}/lokavm"
-    ok "lokavm -> ${INSTALL_DIR}/lokavm"
-  else
-    warn "Pre-built lokavm not found. Build from source: make lokavm && sudo make install"
-  fi
-  rm -rf "$tmp"
 
   # Shell completion.
   if command -v loka &>/dev/null; then
@@ -399,10 +389,9 @@ install_macos() {
   echo -e "${GREEN}${BOLD}  LOKA installed successfully!${NC}"
   echo ""
   echo -e "  Get started:"
-  echo -e "    ${CYAN}loka setup local${NC}           Start the server"
+  echo -e "    ${CYAN}lokad${NC}                      Start the server"
   echo -e "    ${CYAN}loka session create${NC}        Create a session"
   echo -e "    ${CYAN}loka exec <id> -- echo hi${NC}  Run a command"
-  echo -e "    ${CYAN}loka setup down${NC}            Stop"
   echo ""
 }
 
@@ -411,8 +400,7 @@ install_macos() {
 uninstall_previous() {
   local found=false
 
-  # Check for existing LOKA binaries.
-  for bin in loka lokad loka-worker loka-supervisor; do
+  for bin in loka lokad loka-supervisor; do
     if [ -f "${INSTALL_DIR}/$bin" ]; then
       found=true
       break
@@ -426,7 +414,7 @@ uninstall_previous() {
   echo ""
   info "Removing previous installation"
 
-  # Stop running lokad / lokavm.
+  # Stop running lokad.
   if pgrep -x lokad &>/dev/null; then
     echo -n "  Stopping lokad..."
     loka setup down 2>/dev/null || $SUDO pkill -x lokad 2>/dev/null || true
@@ -434,24 +422,12 @@ uninstall_previous() {
     echo " done"
   fi
 
-  # On macOS: kill lokavm.
-  if [ "$OS" = "darwin" ]; then
-    if pgrep -x lokavm &>/dev/null; then
-      echo -n "  Stopping lokavm..."
-      $SUDO pkill -x lokavm 2>/dev/null || true
-      sleep 1
-      echo " done"
-    fi
-  fi
-
-  # Remove binaries.
-  for bin in loka lokad loka-worker loka-supervisor lokavm; do
+  # Remove binaries (including legacy ones).
+  for bin in loka lokad loka-worker loka-supervisor lokavm firecracker; do
     [ -f "${INSTALL_DIR}/$bin" ] && $SUDO rm -f "${INSTALL_DIR}/$bin"
   done
   ok "Old binaries removed"
 
-  # Remove everything else quietly.
-  [ "$OS" = "linux" ] && $SUDO rm -f "${INSTALL_DIR}/firecracker" 2>/dev/null || true
   [ -d "$DATA_DIR" ] && $SUDO rm -rf "$DATA_DIR" 2>/dev/null || true
   $SUDO rm -rf /tmp/loka-data 2>/dev/null || true
   [ "$OS" = "linux" ] && $SUDO rm -rf /etc/loka 2>/dev/null || true

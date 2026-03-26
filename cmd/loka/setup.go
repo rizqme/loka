@@ -1,6 +1,7 @@
 package main
 
 import (
+	crypto_tls "crypto/tls"
 	"fmt"
 	"net/http"
 	"os"
@@ -137,45 +138,57 @@ func deployLocalLinux(name string, foreground bool) error {
 }
 
 func deployLocalMacOS(name string, foreground bool) error {
-	// Find lokavm binary.
-	lokavmPath := findLokaVM()
-	if lokavmPath == "" {
-		return fmt.Errorf("lokavm binary not found. Install: curl -fsSL https://vyprai.github.io/loka/install.sh | bash")
+	// Find lokad binary — it embeds the Apple VZ hypervisor (lokavm library).
+	lokadPath := findLokad()
+	if lokadPath == "" {
+		return fmt.Errorf("lokad binary not found. Run: make build")
 	}
 
 	home, _ := os.UserHomeDir()
-	dataDir := filepath.Join(home, ".loka", "vm")
+	dataDir := filepath.Join(home, ".loka")
+	os.MkdirAll(dataDir, 0755)
 
 	if foreground {
-		// Run lokavm in foreground.
-		cmd := exec.Command(lokavmPath, "--data-dir", dataDir)
+		cmd := exec.Command(lokadPath, "--data-dir", dataDir)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
 	}
 
-	// Start lokavm in background.
+	// Start lokad in background.
 	fmt.Print("Starting LOKA...")
-	logPath := filepath.Join(dataDir, "lokavm.log")
-	os.MkdirAll(dataDir, 0755)
+	logPath := filepath.Join(dataDir, "lokad.log")
 	logFile, err := os.Create(logPath)
 	if err != nil {
 		return fmt.Errorf("create log file: %w", err)
 	}
-	cmd := exec.Command(lokavmPath, "--data-dir", dataDir)
+	cmd := exec.Command(lokadPath, "--data-dir", dataDir)
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
 		logFile.Close()
-		return fmt.Errorf("start lokavm: %w", err)
+		return fmt.Errorf("start lokad: %w", err)
 	}
 	logFile.Close()
 
-	// Wait for health.
+	// Wait for health — try HTTPS first (auto-TLS), then HTTP.
 	fmt.Print(" waiting...")
 	ready := false
+	insecureClient := &http.Client{Transport: &http.Transport{
+		TLSClientConfig: &crypto_tls.Config{InsecureSkipVerify: true},
+	}}
 	for i := 0; i < 60; i++ {
-		resp, err := http.Get("http://localhost:6840/api/v1/health")
+		// Try HTTPS (lokad auto-generates TLS certs).
+		resp, err := insecureClient.Get("https://localhost:6840/api/v1/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 {
+				ready = true
+				break
+			}
+		}
+		// Fall back to HTTP (if TLS disabled).
+		resp, err = http.Get("http://localhost:6840/api/v1/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 {
@@ -193,7 +206,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 		if len(lines) > 10 {
 			lines = lines[len(lines)-10:]
 		}
-		return fmt.Errorf("lokavm did not become healthy:\n%s", strings.Join(lines, "\n"))
+		return fmt.Errorf("lokad did not become healthy:\n%s", strings.Join(lines, "\n"))
 	}
 	fmt.Println(" ready!")
 
@@ -211,7 +224,7 @@ func deployLocalMacOS(name string, foreground bool) error {
 	// Save deployment.
 	store, _ := loadDeployments()
 	meta := map[string]string{
-		"runtime": "lokavm",
+		"runtime": "lokad",
 		"pid":     fmt.Sprint(cmd.Process.Pid),
 	}
 	if caCertLocalPath != "" {
@@ -229,12 +242,19 @@ func deployLocalMacOS(name string, foreground bool) error {
 	return nil
 }
 
-// findLokaVM searches common locations for the lokavm binary.
-func findLokaVM() string {
+// findLokad searches common locations for the lokad binary.
+// Checks sibling directory first (for ./bin/lokad next to ./bin/loka).
+func findLokad() string {
+	if self, err := os.Executable(); err == nil {
+		sibling := filepath.Join(filepath.Dir(self), "lokad")
+		if _, err := os.Stat(sibling); err == nil {
+			return sibling
+		}
+	}
 	candidates := []string{
-		"lokavm",
-		"/usr/local/bin/lokavm",
-		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "lokavm"),
+		"lokad",
+		"/usr/local/bin/lokad",
+		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "lokad"),
 	}
 	for _, p := range candidates {
 		if path, err := exec.LookPath(p); err == nil {
@@ -295,12 +315,12 @@ func newDeployDownCmd() *cobra.Command {
 				if d.Meta != nil {
 					rt = d.Meta["runtime"]
 				}
-				if rt == "lokavm" || rt == "vm" {
-					// Kill lokavm process.
+				if rt == "lokad" || rt == "lokavm" || rt == "vm" {
+					// Kill lokad process.
 					if pidStr, ok := d.Meta["pid"]; ok && pidStr != "" {
 						exec.Command("kill", pidStr).Run()
 					} else {
-						exec.Command("pkill", "-f", "lokavm").Run()
+						exec.Command("pkill", "-f", "lokad").Run()
 					}
 					fmt.Printf("LOKA %q stopped\n", name)
 				} else {

@@ -13,7 +13,7 @@ import (
 	"github.com/vyprai/loka/internal/loka"
 	proxyobjstore "github.com/vyprai/loka/internal/objstore/proxy"
 	"github.com/vyprai/loka/internal/worker"
-	"github.com/vyprai/loka/internal/worker/vm"
+	"github.com/vyprai/loka/pkg/lokavm"
 	"github.com/vyprai/loka/pkg/version"
 )
 
@@ -48,14 +48,27 @@ func main() {
 		Insecure: cfg.ControlPlane.Insecure,
 	})
 
-	// Create worker agent with Firecracker config.
-	fcConfig := vm.FirecrackerConfig{
-		BinaryPath: envOrDefault("LOKA_FIRECRACKER_BIN", "/usr/local/bin/firecracker"),
+	// Create lokavm hypervisor.
+	hvConfig := lokavm.HypervisorConfig{
 		KernelPath: envOrDefault("LOKA_KERNEL_PATH", cfg.DataDir+"/kernel/vmlinux"),
-		RootfsPath: envOrDefault("LOKA_ROOTFS_PATH", cfg.DataDir+"/rootfs/rootfs.ext4"),
 		DataDir:    cfg.DataDir,
 	}
-	agent, err := worker.NewAgent(cfg.Provider, cfg.Labels, cfg.DataDir, objStore, fcConfig, logger)
+	// Try hypervisors in order: VZ (macOS) → Cloud Hypervisor (Linux) → KVM (Linux).
+	var hypervisor lokavm.Hypervisor
+	if vz, err := lokavm.NewHypervisor(hvConfig, logger); err == nil {
+		hypervisor = vz
+		logger.Info("using Apple VZ hypervisor")
+	} else if ch, err := lokavm.NewCHHypervisor(hvConfig, logger); err == nil {
+		hypervisor = ch
+		logger.Info("using Cloud Hypervisor")
+	} else if kvm, err := lokavm.NewKVMHypervisor(hvConfig, logger); err == nil {
+		hypervisor = kvm
+		logger.Info("using KVM hypervisor")
+	} else {
+		logger.Error("no hypervisor available")
+		os.Exit(1)
+	}
+	agent, err := worker.NewAgent(cfg.Provider, cfg.Labels, cfg.DataDir, objStore, hypervisor, logger)
 	if err != nil {
 		logger.Error("failed to create agent", "error", err)
 		os.Exit(1)
@@ -86,9 +99,6 @@ func main() {
 	// For MVP, the worker polls for commands via the session manager.
 	// Since we don't have a poll endpoint yet, the worker just sends heartbeats
 	// and waits for the CP to push commands (which happens in-process in dev mode).
-
-	// Start periodic TAP device cleanup to remove orphaned interfaces.
-	agent.VMManager().StartTAPCleaner(ctx)
 
 	// Graceful shutdown.
 	go func() {

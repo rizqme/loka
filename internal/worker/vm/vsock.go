@@ -4,24 +4,31 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/vyprai/loka/internal/loka"
 )
 
-// VsockClient communicates with the supervisor inside a Firecracker VM
-// over the vsock unix domain socket exposed by Firecracker on the host.
+// VsockClient communicates with the supervisor inside a VM.
+// It supports two connection modes:
+//   - Firecracker: connects via vsock UDS with CONNECT handshake
+//   - lokavm: connects via DialVsock function (direct net.Conn)
 //
-// Protocol: JSON-RPC over a single UDS connection.
-// The supervisor listens on vsock port 52 inside the guest.
-// Firecracker exposes it as a UDS file on the host.
+// Protocol: JSON-RPC. The supervisor listens on vsock port 52 inside the guest.
 type VsockClient struct {
-	socketPath string
+	socketPath string                         // Firecracker vsock UDS path.
+	dialFn     func(port uint32) (net.Conn, error) // lokavm vsock dialer (nil = use Firecracker UDS).
 	timeout    time.Duration
+
+	// Connection pool: reuse a persistent connection for lower latency.
+	mu       sync.Mutex
+	conn     net.Conn
+	connGood bool
 }
 
-// NewVsockClient creates a client for a VM's vsock socket.
+// NewVsockClient creates a client for a Firecracker VM's vsock socket.
 func NewVsockClient(vsockPath string) *VsockClient {
 	return &VsockClient{
 		socketPath: vsockPath,
@@ -29,8 +36,16 @@ func NewVsockClient(vsockPath string) *VsockClient {
 	}
 }
 
-// SocketPath returns the underlying vsock UDS path, allowing callers to
-// establish raw connections for operations like TCP port forwarding.
+// NewVsockClientFromDialer creates a client using a direct vsock dial function.
+// Used with lokavm where VM.DialVsock provides net.Conn directly.
+func NewVsockClientFromDialer(dialFn func(port uint32) (net.Conn, error)) *VsockClient {
+	return &VsockClient{
+		dialFn:  dialFn,
+		timeout: 30 * time.Second,
+	}
+}
+
+// SocketPath returns the underlying vsock UDS path (empty for lokavm dialer).
 func (c *VsockClient) SocketPath() string {
 	return c.socketPath
 }
@@ -227,11 +242,12 @@ func (c *VsockClient) ServiceLogs(lines int) (*ServiceLogsResult, error) {
 
 // MountVolumeRequest is the params for "mount_volume" method.
 type MountVolumeRequest struct {
-	Path     string `json:"path"`      // Mount path inside VM.
-	Mode     string `json:"mode"`      // "fuse" or "block".
-	ReadOnly bool   `json:"readonly"`  // Whether the mount is read-only.
-	Bucket   string `json:"bucket"`    // Object store bucket (for fuse mode).
-	Prefix   string `json:"prefix"`    // Object key prefix (for fuse mode).
+	Path     string `json:"path"`                // Mount path inside VM.
+	Mode     string `json:"mode"`                // "virtiofs", "fuse", or "block".
+	ReadOnly bool   `json:"readonly"`            // Whether the mount is read-only.
+	Tag      string `json:"tag,omitempty"`        // Virtiofs mount tag (for virtiofs mode).
+	Bucket   string `json:"bucket,omitempty"`     // Object store bucket (for fuse mode).
+	Prefix   string `json:"prefix,omitempty"`     // Object key prefix (for fuse mode).
 }
 
 // MountVolume sends a mount_volume RPC to the supervisor inside the VM.
@@ -315,46 +331,35 @@ func (c *VsockClient) HealthCheck(port int, path string) error {
 // connection is properly closed via defer conn.Close() to prevent leaks.
 
 func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessage, error) {
-	// Connect to the Firecracker vsock UDS and send CONNECT command.
-	// Firecracker's vsock host-side protocol: connect to UDS, send "CONNECT <port>\n",
-	// then receive "OK <port>\n" — after that it's a raw bidirectional stream.
-	conn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
+	// Try pooled connection first, fall back to fresh dial.
+	conn, err := c.getConn()
 	if err != nil {
-		return nil, fmt.Errorf("vsock connect: %w", err)
+		return nil, err
 	}
-	defer conn.Close()
 	conn.SetDeadline(time.Now().Add(c.timeout))
 
-	// Firecracker vsock handshake.
-	if _, err := fmt.Fprintf(conn, "CONNECT 52\n"); err != nil {
-		return nil, fmt.Errorf("vsock CONNECT: %w", err)
-	}
-	// Read "OK <port>\n" response.
-	buf := make([]byte, 32)
-	n, err := conn.Read(buf)
-	if err != nil {
-		return nil, fmt.Errorf("vsock handshake read: %w", err)
-	}
-	resp := string(buf[:n])
-	if len(resp) < 2 || resp[:2] != "OK" {
-		return nil, fmt.Errorf("vsock handshake failed: %s", resp)
-	}
-
-	// Send request.
 	req := RPCRequest{
 		Method: method,
 		ID:     uuid.New().String(),
 		Params: params,
 	}
-	encoder := json.NewEncoder(conn)
-	if err := encoder.Encode(req); err != nil {
-		return nil, fmt.Errorf("vsock write: %w", err)
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		// Connection broken — close and retry with fresh one.
+		c.closeConn()
+		conn, err = c.getConn()
+		if err != nil {
+			return nil, err
+		}
+		conn.SetDeadline(time.Now().Add(c.timeout))
+		if err := json.NewEncoder(conn).Encode(req); err != nil {
+			c.closeConn()
+			return nil, fmt.Errorf("vsock write: %w", err)
+		}
 	}
 
-	// Read RPC response.
 	var rpcResp RPCResponse
-	decoder := json.NewDecoder(conn)
-	if err := decoder.Decode(&rpcResp); err != nil {
+	if err := json.NewDecoder(conn).Decode(&rpcResp); err != nil {
+		c.closeConn()
 		return nil, fmt.Errorf("vsock read: %w", err)
 	}
 
@@ -363,4 +368,70 @@ func (c *VsockClient) call(method string, params json.RawMessage) (json.RawMessa
 	}
 
 	return rpcResp.Result, nil
+}
+
+// getConn returns a pooled connection or dials a new one.
+func (c *VsockClient) getConn() (net.Conn, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if c.conn != nil && c.connGood {
+		return c.conn, nil
+	}
+
+	conn, err := c.dialNew()
+	if err != nil {
+		return nil, err
+	}
+	c.conn = conn
+	c.connGood = true
+	return conn, nil
+}
+
+// closeConn marks the pooled connection as broken.
+func (c *VsockClient) closeConn() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+		c.connGood = false
+	}
+}
+
+// dialNew establishes a fresh connection to the supervisor.
+func (c *VsockClient) dialNew() (net.Conn, error) {
+	// lokavm path: direct vsock dial.
+	if c.dialFn != nil {
+		conn, err := c.dialFn(52) // Supervisor listens on vsock port 52.
+		if err != nil {
+			return nil, fmt.Errorf("vsock dial: %w", err)
+		}
+		return conn, nil
+	}
+
+	// Firecracker path: UDS + CONNECT handshake.
+	conn, err := net.DialTimeout("unix", c.socketPath, c.timeout)
+	if err != nil {
+		return nil, fmt.Errorf("vsock connect: %w", err)
+	}
+	conn.SetDeadline(time.Now().Add(c.timeout))
+
+	if _, err := fmt.Fprintf(conn, "CONNECT 52\n"); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("vsock CONNECT: %w", err)
+	}
+	buf := make([]byte, 32)
+	n, err := conn.Read(buf)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("vsock handshake read: %w", err)
+	}
+	resp := string(buf[:n])
+	if len(resp) < 2 || resp[:2] != "OK" {
+		conn.Close()
+		return nil, fmt.Errorf("vsock handshake failed: %s", resp)
+	}
+
+	return conn, nil
 }
