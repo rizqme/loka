@@ -24,7 +24,7 @@ type VM struct {
 func bootVM(ctx context.Context, kernelPath, initrdPath, rootfsPath string, cpus, memoryMB int, dataDir string, logger *slog.Logger) (*VM, error) {
 	// Boot loader options.
 	opts := []vz.LinuxBootLoaderOption{
-		vz.WithCommandLine("console=ttyAMA0 console=hvc0 root=/dev/vda rw init=/sbin/init ip=dhcp"),
+		vz.WithCommandLine("console=hvc0 root=/dev/vda rw init=/sbin/init ip=dhcp"),
 	}
 	if initrdPath != "" {
 		opts = append(opts, vz.WithInitrd(initrdPath))
@@ -41,10 +41,28 @@ func bootVM(ctx context.Context, kernelPath, initrdPath, rootfsPath string, cpus
 		return nil, fmt.Errorf("vm config: %w", err)
 	}
 
-	// Serial console → stdout (to see kernel boot messages).
+	// Serial console via pipe — kernel output goes to a pipe we can read.
 	logPath := dataDir + "/console.log"
 	_ = logPath
-	serialAttachment, err := vz.NewFileHandleSerialPortAttachment(os.Stdin, os.Stdout)
+	readPipe, writePipe, _ := os.Pipe()  // writePipe = guest writes here, readPipe = we read from here
+	inputRead, inputWrite, _ := os.Pipe() // inputWrite = we write here, inputRead = guest reads from here
+	_ = inputWrite // We don't send input to the guest for now
+
+	// Pump console output to stdout in background
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			n, err := readPipe.Read(buf)
+			if n > 0 {
+				os.Stdout.Write(buf[:n])
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	serialAttachment, err := vz.NewFileHandleSerialPortAttachment(inputRead, writePipe)
 	if err != nil {
 		return nil, fmt.Errorf("serial attachment: %w", err)
 	}
