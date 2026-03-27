@@ -2106,7 +2106,7 @@ if [ "$VM_AVAILABLE" = true ] && [ "$DOCKER_AVAILABLE" = true ]; then
 
     # Session list
     SL=$("$LOKA_BIN" $CLI_S session list 2>&1)
-    echo "$SL" | grep -q "cli-test" && pass "CLI session list" || fail "CLI session list" "$SL"
+    echo "$SL" | grep -q "cli-$RUN_ID" && pass "CLI session list" || fail "CLI session list" "$SL"
 
     # Session get
     SG=$("$LOKA_BIN" $CLI_S session get "$CLI_SID" 2>&1)
