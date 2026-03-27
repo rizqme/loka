@@ -1,6 +1,6 @@
 // ── Session ─────────────────────────────────────────────
 
-export type SessionStatus = 'creating' | 'running' | 'paused' | 'terminating' | 'terminated' | 'error';
+export type SessionStatus = 'creating' | 'provisioning' | 'running' | 'paused' | 'idle' | 'terminating' | 'terminated' | 'error';
 export type ExecMode = 'explore' | 'execute' | 'ask';
 export type ExecStatus = 'pending' | 'pending_approval' | 'running' | 'success' | 'failed' | 'canceled' | 'rejected';
 export type CheckpointType = 'light' | 'full';
@@ -22,6 +22,8 @@ export interface Session {
   Ready: boolean;
   StatusMessage?: string;
   ExecPolicy: ExecPolicy;
+  IdleTimeout?: number;
+  LastActivity?: string;
   CreatedAt: string;
   UpdatedAt: string;
 }
@@ -43,6 +45,14 @@ export interface StorageMount {
   endpoint?: string;
   /** Credentials: access_key_id, secret_access_key, service_account_json, account_name, account_key, sas_token */
   credentials?: Record<string, string>;
+  /** Git repository: "owner/repo" or full HTTPS URL (provider="github") */
+  git_repo?: string;
+  /** Git ref: branch, tag, or commit SHA (provider="github") */
+  git_ref?: string;
+  /** Host directory path (provider="local") */
+  host_path?: string;
+  /** Named volume identifier (provider="volume") */
+  name?: string;
 }
 
 export interface PortMapping {
@@ -171,6 +181,87 @@ export interface Worker {
   Status: string;
   Capacity: { CPUCores: number; MemoryMB: number; DiskMB: number };
   Labels: Record<string, string>;
+}
+
+// ── Service ──────────────────────────────────────────────
+
+export type ServiceStatus = 'deploying' | 'running' | 'stopped' | 'idle' | 'error' | 'terminated';
+
+export interface Service {
+  ID: string;
+  Name: string;
+  Slug: string;
+  Status: ServiceStatus;
+  Image: string;
+  Port: number;
+  WorkerID: string;
+  Env: Record<string, string>;
+  Routes: ServiceRoute[];
+  Autoscale?: AutoscaleConfig;
+  Ready: boolean;
+  StatusMessage?: string;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+export interface ServiceRoute {
+  Subdomain: string;
+  CustomDomain: string;
+  Port: number;
+  Protocol: string;
+}
+
+export interface AutoscaleConfig {
+  Min: number;
+  Max: number;
+  TargetConcurrency: number;
+  ScaleUpThreshold?: number;
+  ScaleDownThreshold?: number;
+  Cooldown?: number;
+}
+
+export interface DeployServiceOpts {
+  name: string;
+  image: string;
+  port: number;
+  env?: Record<string, string>;
+  mounts?: StorageMount[];
+  health_path?: string;
+  health_interval?: number;
+  idle_timeout?: number;
+  autoscale?: AutoscaleConfig;
+  wait?: boolean;
+  timeout?: number;
+}
+
+// ── Volume ───────────────────────────────────────────────
+
+export interface VolumeRecord {
+  Name: string;
+  Type: string;
+  Provider: string;
+  MountCount: number;
+  CreatedAt: string;
+  UpdatedAt: string;
+}
+
+// ── Worker Token ─────────────────────────────────────────
+
+export interface WorkerToken {
+  ID: string;
+  Name: string;
+  Token: string;
+  ExpiresAt: string;
+  CreatedAt: string;
+}
+
+// ── Object Store ─────────────────────────────────────────
+
+export interface ObjectInfo {
+  Key: string;
+  Size: number;
+  LastModified: string;
+  ETag: string;
 }
 
 // ── Streaming ───────────────────────────────────────────

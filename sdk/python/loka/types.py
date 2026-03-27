@@ -24,6 +24,13 @@ class StorageMount:
     region: str = ""
     endpoint: str = ""         # For S3-compatible (MinIO, R2)
     credentials: dict[str, str] = field(default_factory=dict)
+    # Git repository (provider="github" or "git")
+    git_repo: str = ""        # "owner/repo" or full HTTPS URL
+    git_ref: str = ""         # Branch, tag, or commit SHA
+    # Host directory
+    host_path: str = ""
+    # Named volume
+    name: str = ""
 
     @staticmethod
     def s3(bucket: str, mount_path: str, *, access_key_id: str = "", secret_access_key: str = "",
@@ -62,6 +69,32 @@ class StorageMount:
         return StorageMount(provider="azure-blob", bucket=container, mount_path=mount_path,
                             prefix=prefix, read_only=read_only, credentials=creds)
 
+    @staticmethod
+    def github(repo: str, mount_path: str, *, ref: str = "HEAD", credentials: str = "",
+               read_only: bool = True) -> "StorageMount":
+        """Mount a GitHub repository."""
+        return StorageMount(provider="github", mount_path=mount_path, read_only=read_only,
+                            git_repo=repo, git_ref=ref,
+                            credentials={"token": credentials} if credentials else {})
+
+    @staticmethod
+    def local(host_path: str, mount_path: str, *, read_only: bool = False) -> "StorageMount":
+        """Mount a host directory."""
+        return StorageMount(provider="local", mount_path=mount_path, read_only=read_only,
+                            host_path=host_path)
+
+    @staticmethod
+    def volume(name: str, mount_path: str, *, read_only: bool = False) -> "StorageMount":
+        """Mount a named persistent volume."""
+        return StorageMount(provider="volume", mount_path=mount_path, read_only=read_only,
+                            name=name)
+
+    @staticmethod
+    def store(name: str, mount_path: str, *, read_only: bool = False) -> "StorageMount":
+        """Mount a shared store volume (NFS-backed, cross-worker, lockable)."""
+        return StorageMount(provider="store", mount_path=mount_path, read_only=read_only,
+                            name=name)
+
 
 @dataclass
 class Session:
@@ -80,6 +113,8 @@ class Session:
     Ports: list[Any] = field(default_factory=list)
     Ready: bool = False
     StatusMessage: str = ""
+    IdleTimeout: int = 0
+    LastActivity: str = ""
     CreatedAt: str = ""
     UpdatedAt: str = ""
 
@@ -165,3 +200,58 @@ class Worker:
     Region: str = ""
     Status: str = ""
     Labels: dict[str, str] = field(default_factory=dict)
+
+
+@dataclass
+class Service:
+    """A deployed long-running service."""
+    ID: str = ""
+    Name: str = ""
+    Slug: str = ""
+    Status: str = ""  # deploying, running, stopped, idle, error, terminated
+    Image: str = ""
+    Port: int = 0
+    WorkerID: str = ""
+    Env: dict[str, str] = field(default_factory=dict)
+    Routes: list[Any] = field(default_factory=list)
+    Autoscale: dict[str, Any] = field(default_factory=dict)
+    Ready: bool = False
+    StatusMessage: str = ""
+    CreatedAt: str = ""
+    UpdatedAt: str = ""
+
+
+@dataclass
+class ServiceRoute:
+    Subdomain: str = ""
+    CustomDomain: str = ""
+    Port: int = 0
+    Protocol: str = "http"
+
+
+@dataclass
+class VolumeRecord:
+    """A named persistent volume."""
+    Name: str = ""
+    Type: str = ""
+    Provider: str = ""
+    MountCount: int = 0
+    CreatedAt: str = ""
+    UpdatedAt: str = ""
+
+
+@dataclass
+class WorkerToken:
+    ID: str = ""
+    Name: str = ""
+    Token: str = ""
+    ExpiresAt: str = ""
+    CreatedAt: str = ""
+
+
+@dataclass
+class ObjectInfo:
+    Key: str = ""
+    Size: int = 0
+    LastModified: str = ""
+    ETag: str = ""

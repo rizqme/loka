@@ -6,6 +6,8 @@ export type {
   Checkpoint, CheckpointType,
   Artifact,
   Image, Worker,
+  Service, DeployServiceOpts, ServiceRoute, AutoscaleConfig, ServiceStatus,
+  VolumeRecord, WorkerToken, ObjectInfo,
   ExecPolicy, ModeExecPolicy,
   NetworkPolicy, NetworkRuleSet, NetworkRule,
   FilesystemPolicy, FilesystemRule,

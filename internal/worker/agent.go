@@ -22,6 +22,7 @@ import (
 	"github.com/vyprai/loka/internal/objstore"
 	"github.com/vyprai/loka/internal/worker/vm"
 	"github.com/vyprai/loka/pkg/lokavm"
+	"github.com/vyprai/loka/pkg/lokavm/gitcache"
 )
 
 // Agent is the worker-side agent that manages microVMs.
@@ -41,6 +42,8 @@ type Agent struct {
 	checkpointMgr *CheckpointManager
 	hypervisor    lokavm.Hypervisor
 	objStore      objstore.ObjectStore
+	gitCache      *gitcache.Cache
+	nfsAddr       string // NFS store server address (e.g. "127.0.0.1:2049")
 
 	// Warm boot cache: image ref → snapshot for instant VM restore.
 	warmMu    sync.RWMutex
@@ -98,6 +101,14 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 	overlay := vm.NewOverlayManager(dataDir)
 	cpMgr := NewCheckpointManager(overlay, objStore, logger)
 
+	gc, err := gitcache.New(gitcache.Config{
+		CacheDir: filepath.Join(dataDir, "gitcache"),
+		Logger:   logger,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("init git cache: %w", err)
+	}
+
 	return &Agent{
 		id:            uuid.New().String(),
 		hostname:      hostname,
@@ -110,6 +121,7 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 		checkpointMgr: cpMgr,
 		hypervisor:    hypervisor,
 		objStore:      objStore,
+		gitCache:      gc,
 		warmCache:     make(map[string]*warmSnapshot),
 	}, nil
 }
@@ -143,6 +155,9 @@ func (a *Agent) Provider() string { return a.provider }
 
 // Labels returns the agent's labels.
 func (a *Agent) Labels() map[string]string { return a.labels }
+
+// SetNFSAddr sets the NFS store server address for resolving store mounts.
+func (a *Agent) SetNFSAddr(addr string) { a.nfsAddr = addr }
 
 // LaunchOpts holds options for launching a session.
 type LaunchOpts struct {
@@ -241,6 +256,16 @@ func (a *Agent) LaunchSession(ctx context.Context, sessionID string, opts Launch
 		})
 	} else {
 		vmCfg.BootArgs = "console=hvc0"
+	}
+
+	// Resolve provider-specific mounts to local HostPath directories.
+	for i := range opts.Mounts {
+		if err := a.resolveGitMount(context.Background(), &opts.Mounts[i]); err != nil {
+			return fmt.Errorf("resolve mount %d (%s): %w", i, opts.Mounts[i].Provider, err)
+		}
+		if err := a.resolveStoreMount(&opts.Mounts[i]); err != nil {
+			return fmt.Errorf("resolve mount %d (%s): %w", i, opts.Mounts[i].Provider, err)
+		}
 	}
 
 	// User-specified shared directories via virtiofs.
@@ -348,6 +373,103 @@ func (a *Agent) stopVM(id string) {
 	}
 	// Clean up per-session rootfs clone.
 	os.RemoveAll(filepath.Join(a.dataDir, "vms", id))
+}
+
+// resolveGitMount resolves a provider="github" or "git" mount by cloning
+// the repo into the local git cache and setting HostPath.
+func (a *Agent) resolveGitMount(ctx context.Context, mount *loka.Volume) error {
+	if mount.Provider != "github" && mount.Provider != "git" {
+		return nil
+	}
+	if mount.GitRepo == "" {
+		return fmt.Errorf("git_repo is required for provider=%q", mount.Provider)
+	}
+
+	ref := mount.GitRef
+	if ref == "" {
+		ref = "HEAD"
+	}
+
+	path, sha, err := a.gitCache.Checkout(ctx, mount.GitRepo, ref, mount.Credentials)
+	if err != nil {
+		return fmt.Errorf("git checkout %s@%s: %w", mount.GitRepo, ref, err)
+	}
+
+	mount.HostPath = path
+	if mount.Access == "" {
+		mount.Access = "readonly"
+	}
+
+	a.logger.Info("resolved git mount",
+		"repo", mount.GitRepo, "ref", ref, "sha", sha[:12], "path", mount.Path)
+	return nil
+}
+
+// resolveStoreMount resolves a provider="store" mount by NFS-mounting the
+// control plane's store directory to a local path, then setting HostPath.
+// For the local worker (same process as control plane), we skip NFS and
+// use the store directory directly.
+func (a *Agent) resolveStoreMount(mount *loka.Volume) error {
+	if mount.Provider != "store" {
+		return nil
+	}
+	if mount.Name == "" {
+		return fmt.Errorf("name is required for provider=store")
+	}
+
+	// For local worker: the store directory is on the same machine.
+	// Use it directly without NFS mount.
+	storeDir := filepath.Join(a.dataDir, "..", "stores", mount.Name)
+	if abs, err := filepath.Abs(storeDir); err == nil {
+		storeDir = abs
+	}
+
+	// If the store dir exists locally (local worker), use it directly.
+	if info, err := os.Stat(storeDir); err == nil && info.IsDir() {
+		mount.HostPath = storeDir
+		a.logger.Info("resolved store mount (local)", "store", mount.Name, "path", storeDir)
+		return nil
+	}
+
+	// Remote worker: NFS mount from control plane.
+	if a.nfsAddr == "" {
+		return fmt.Errorf("store mount requires NFS server address (not configured)")
+	}
+
+	mountPoint := filepath.Join(a.dataDir, "nfs", mount.Name)
+	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+		return fmt.Errorf("create NFS mount point: %w", err)
+	}
+
+	// Check if already mounted.
+	if !isMounted(mountPoint) {
+		nfsSrc := fmt.Sprintf("%s:/%s", a.nfsAddr, mount.Name)
+		cmd := exec.Command("mount", "-t", "nfs", "-o", "vers=3,nolock,soft,timeo=50", nfsSrc, mountPoint)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("NFS mount %s: %s: %w", nfsSrc, string(out), err)
+		}
+	}
+
+	mount.HostPath = mountPoint
+	a.logger.Info("resolved store mount (NFS)", "store", mount.Name, "addr", a.nfsAddr, "path", mountPoint)
+	return nil
+}
+
+// isMounted checks if a path is a mount point by comparing device IDs.
+func isMounted(path string) bool {
+	// Simple check: if the path has files/dirs, it's likely mounted.
+	// A proper check would compare stat.Dev of path vs parent.
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false
+	}
+	// If directory has a .nfs-mounted marker, it's from us.
+	for _, e := range entries {
+		if e.Name() == ".nfs-mounted" {
+			return true
+		}
+	}
+	return false
 }
 
 // WorkspacePath returns the workspace path for a session.

@@ -36,6 +36,7 @@ import (
 	leaderobjstore "github.com/vyprai/loka/internal/objstore/leader"
 	localobjstore "github.com/vyprai/loka/internal/objstore/local"
 	s3objstore "github.com/vyprai/loka/internal/objstore/s3"
+	lokanfs "github.com/vyprai/loka/internal/controlplane/nfs"
 	lokadns "github.com/vyprai/loka/internal/dns"
 	"github.com/vyprai/loka/internal/provider"
 	"github.com/vyprai/loka/pkg/lokavm"
@@ -518,7 +519,22 @@ func main() {
 		localWorker.SetStore(db)
 		localWorker.Start(ctx)
 
+		// Start NFS store server for shared "store" volumes.
+		nfsAddr := "127.0.0.1:2049"
+		storesDir := filepath.Join(cfg.DataDir, "stores")
+		nfsSrv, err := lokanfs.NewStoreServer(storesDir, nfsAddr, logger)
+		if err != nil {
+			logger.Warn("NFS store server failed to initialize", "error", err)
+		} else {
+			go func() {
+				if err := nfsSrv.Start(ctx); err != nil {
+					logger.Warn("NFS store server error", "error", err)
+				}
+			}()
+		}
+
 		agent := localWorker.Agent()
+		agent.SetNFSAddr(nfsAddr)
 		imgMgr.SetHypervisor(agent.Hypervisor())
 
 		// Wire up service log retrieval through the embedded agent.

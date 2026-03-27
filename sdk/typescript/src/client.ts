@@ -1,6 +1,7 @@
 import type {
   Session, CreateSessionOpts, Execution, RunOpts, ExecMode,
   Checkpoint, CheckpointType, Image, Worker, StreamEvent, SyncResult, Artifact,
+  Service, DeployServiceOpts, ServiceRoute, VolumeRecord, WorkerToken, ObjectInfo,
 } from './types';
 
 export interface LokaClientOpts {
@@ -372,6 +373,200 @@ export class LokaClient {
     return this.post(`/api/v1/workers/${id}/drain`, { timeout_seconds: timeoutSeconds });
   }
 
+  // ── Services ─────────────────────────────────────────
+
+  async deployService(opts: DeployServiceOpts): Promise<Service> {
+    const { wait = true, timeout = 120, ...deployOpts } = opts;
+    let svc: Service = await this.post('/api/v1/services', deployOpts);
+    if (!wait) return svc;
+    const deadline = Date.now() + timeout * 1000;
+    while (svc.Status !== 'running' && svc.Status !== 'error' && svc.Status !== 'terminated') {
+      if (Date.now() > deadline) throw new Error(`Service ${svc.ID} not ready after ${timeout}s (status: ${svc.Status})`);
+      await new Promise(r => setTimeout(r, 500));
+      svc = await this.getService(svc.ID);
+    }
+    if (svc.Status === 'error') throw new Error(`Service failed: ${svc.StatusMessage || 'unknown error'}`);
+    return svc;
+  }
+
+  async getService(id: string): Promise<Service> {
+    return this.get(`/api/v1/services/${id}`);
+  }
+
+  async listServices(opts?: { status?: string; name?: string; limit?: number; offset?: number }): Promise<{ services: Service[]; total: number }> {
+    const params = new URLSearchParams();
+    if (opts?.status) params.set('status', opts.status);
+    if (opts?.name) params.set('name', opts.name);
+    if (opts?.limit) params.set('limit', String(opts.limit));
+    if (opts?.offset) params.set('offset', String(opts.offset));
+    const q = params.toString() ? `?${params}` : '';
+    return this.get(`/api/v1/services${q}`);
+  }
+
+  async destroyService(id: string): Promise<void> {
+    await this.del(`/api/v1/services/${id}`);
+  }
+
+  async stopService(id: string): Promise<Service> {
+    return this.post(`/api/v1/services/${id}/stop`, {});
+  }
+
+  async redeployService(id: string): Promise<Service> {
+    return this.post(`/api/v1/services/${id}/redeploy`, {});
+  }
+
+  async updateServiceEnv(id: string, env: Record<string, string>): Promise<Service> {
+    return this.put(`/api/v1/services/${id}/env`, env);
+  }
+
+  async getServiceLogs(id: string, lines = 100): Promise<string> {
+    const data = await this.get<{ logs: string }>(`/api/v1/services/${id}/logs?lines=${lines}`);
+    return data.logs || '';
+  }
+
+  async addServiceRoute(id: string, subdomain: string, opts?: { port?: number; protocol?: string }): Promise<ServiceRoute> {
+    return this.post(`/api/v1/services/${id}/routes`, { subdomain, ...opts });
+  }
+
+  async removeServiceRoute(id: string, subdomain: string): Promise<void> {
+    await this.del(`/api/v1/services/${id}/routes/${subdomain}`);
+  }
+
+  async listServiceRoutes(id: string): Promise<{ routes: ServiceRoute[] }> {
+    return this.get(`/api/v1/services/${id}/routes`);
+  }
+
+  // ── Volumes ──────────────────────────────────────────
+
+  async createVolume(name: string, type = 'network'): Promise<VolumeRecord> {
+    return this.post('/api/v1/volumes', { name, type });
+  }
+
+  async listVolumes(): Promise<{ volumes: VolumeRecord[] }> {
+    return this.get('/api/v1/volumes');
+  }
+
+  async getVolume(name: string): Promise<VolumeRecord> {
+    return this.get(`/api/v1/volumes/${name}`);
+  }
+
+  async deleteVolume(name: string): Promise<void> {
+    await this.del(`/api/v1/volumes/${name}`);
+  }
+
+  // ── Object Store ─────────────────────────────────────
+
+  async objStorePut(bucket: string, key: string, data: ArrayBuffer | string, contentType = 'application/octet-stream'): Promise<void> {
+    const headers: Record<string, string> = { 'Content-Type': contentType };
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    const resp = await fetch(`${this.baseUrl}/api/v1/objstore/objects/${bucket}/${key}`, {
+      method: 'PUT', headers, body: data,
+    });
+    if (!resp.ok) throw new Error(`PUT object failed: HTTP ${resp.status}`);
+  }
+
+  async objStoreGet(bucket: string, key: string): Promise<ArrayBuffer> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    const resp = await fetch(`${this.baseUrl}/api/v1/objstore/objects/${bucket}/${key}`, { headers });
+    if (!resp.ok) throw new Error(`GET object failed: HTTP ${resp.status}`);
+    return resp.arrayBuffer();
+  }
+
+  async objStoreHead(bucket: string, key: string): Promise<boolean> {
+    const headers: Record<string, string> = {};
+    if (this.token) headers['Authorization'] = `Bearer ${this.token}`;
+    const resp = await fetch(`${this.baseUrl}/api/v1/objstore/objects/${bucket}/${key}`, { method: 'HEAD', headers });
+    return resp.status === 200;
+  }
+
+  async objStoreDelete(bucket: string, key: string): Promise<void> {
+    await this.del(`/api/v1/objstore/objects/${bucket}/${key}`);
+  }
+
+  async objStoreList(bucket: string, prefix?: string): Promise<ObjectInfo[]> {
+    const q = prefix ? `?prefix=${encodeURIComponent(prefix)}` : '';
+    const data = await this.get<any>(`/api/v1/objstore/list/${bucket}${q}`);
+    return Array.isArray(data) ? data : (data.objects || []);
+  }
+
+  // ── Worker Tokens ────────────────────────────────────
+
+  async createWorkerToken(name: string, expiresSeconds = 3600): Promise<WorkerToken> {
+    return this.post('/api/v1/worker-tokens', { name, expires_seconds: expiresSeconds });
+  }
+
+  async listWorkerTokens(): Promise<{ tokens: WorkerToken[] }> {
+    return this.get('/api/v1/worker-tokens');
+  }
+
+  async revokeWorkerToken(tokenId: string): Promise<void> {
+    await this.del(`/api/v1/worker-tokens/${tokenId}`);
+  }
+
+  // ── Admin ────────────────────────────────────────────
+
+  async triggerGC(dryRun = false): Promise<any> {
+    return this.post('/api/v1/admin/gc', { dry_run: dryRun });
+  }
+
+  async gcStatus(): Promise<any> {
+    return this.get('/api/v1/admin/gc/status');
+  }
+
+  async retentionConfig(): Promise<any> {
+    return this.get('/api/v1/admin/retention');
+  }
+
+  async toggleDNS(enabled: boolean): Promise<any> {
+    return this.post('/api/v1/admin/dns', { enabled });
+  }
+
+  async raftStatus(): Promise<any> {
+    return this.get('/api/debug/raft');
+  }
+
+  // ── Workers (extended) ───────────────────────────────
+
+  async getWorker(id: string): Promise<Worker> {
+    return this.get(`/api/v1/workers/${id}`);
+  }
+
+  async undrainWorker(id: string): Promise<Worker> {
+    return this.post(`/api/v1/workers/${id}/undrain`, {});
+  }
+
+  async labelWorker(id: string, labels: Record<string, string>): Promise<Worker> {
+    return this.put(`/api/v1/workers/${id}/labels`, { labels });
+  }
+
+  async removeWorker(id: string, force = false): Promise<void> {
+    const q = force ? '?force=true' : '';
+    await this.del(`/api/v1/workers/${id}${q}`);
+  }
+
+  // ── Providers ────────────────────────────────────────
+
+  async listProviders(): Promise<{ providers: any[] }> {
+    return this.get('/api/v1/providers');
+  }
+
+  async provisionWorkers(provider: string, count = 1, config?: Record<string, any>): Promise<{ workers: Worker[] }> {
+    return this.post(`/api/v1/providers/${provider}/provision`, { count, ...config });
+  }
+
+  async deprovisionWorker(provider: string, workerId: string): Promise<void> {
+    await this.del(`/api/v1/providers/${provider}/workers/${workerId}`);
+  }
+
+  async providerStatus(provider: string): Promise<any> {
+    return this.get(`/api/v1/providers/${provider}/status`);
+  }
+
+  async migrateSession(id: string, targetWorkerId: string): Promise<Session> {
+    return this.post(`/api/v1/sessions/${id}/migrate`, { target_worker_id: targetWorkerId });
+  }
+
   // ── Health ──────────────────────────────────────────
 
   async health(): Promise<{ status: string; workers_total: number; workers_ready: number }> {
@@ -390,6 +585,10 @@ export class LokaClient {
 
   private async del<T>(path: string): Promise<T> {
     return this.request('DELETE', path);
+  }
+
+  private async put<T>(path: string, body: unknown): Promise<T> {
+    return this.request('PUT', path, body);
   }
 
   private async request<T>(method: string, path: string, body?: unknown): Promise<T> {

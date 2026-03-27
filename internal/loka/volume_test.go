@@ -11,9 +11,14 @@ func TestVolumeEffectiveMode(t *testing.T) {
 		{"hostpath returns virtiofs", Volume{HostPath: "/data"}, "virtiofs"},
 		{"network type returns virtiofs", Volume{Type: "network"}, "virtiofs"},
 		{"object type returns virtiofs", Volume{Type: "object"}, "virtiofs"},
+		{"store type returns virtiofs", Volume{Type: "store"}, "virtiofs"},
+		{"provider local returns virtiofs", Volume{Provider: "local"}, "virtiofs"},
+		{"provider volume returns virtiofs", Volume{Provider: "volume"}, "virtiofs"},
+		{"provider store returns virtiofs", Volume{Provider: "store", Name: "mystore"}, "virtiofs"},
+		{"github returns virtiofs", Volume{Provider: "github", GitRepo: "owner/repo"}, "virtiofs"},
+		{"git returns virtiofs", Volume{Provider: "git", GitRepo: "owner/repo"}, "virtiofs"},
 		{"readonly legacy returns block", Volume{Access: "readonly", Provider: "s3", Bucket: "b"}, "block"},
 		{"readwrite legacy returns fuse", Volume{Provider: "s3", Bucket: "b"}, "fuse"},
-		{"readwrite default returns fuse", Volume{Provider: "volume"}, "fuse"},
 	}
 
 	for _, tt := range tests {
@@ -34,15 +39,17 @@ func TestVolumeEffectiveType(t *testing.T) {
 	}{
 		{"explicit network", Volume{Type: "network"}, "network"},
 		{"explicit object", Volume{Type: "object"}, "object"},
-		{"nfs server auto-detect", Volume{NFSServer: "10.0.0.1"}, "network"},
-		{"provider nfs auto-detect", Volume{Provider: "nfs"}, "network"},
+		{"explicit store", Volume{Type: "store"}, "store"},
 		{"hostpath auto-detect", Volume{HostPath: "/data"}, "network"},
 		{"provider local auto-detect", Volume{Provider: "local"}, "network"},
+		{"provider volume auto-detect", Volume{Provider: "volume", Name: "mydata"}, "network"},
+		{"provider store auto-detect", Volume{Provider: "store", Name: "mystore"}, "store"},
 		{"s3 bucket auto-detect", Volume{Bucket: "my-bucket"}, "object"},
 		{"provider s3 auto-detect", Volume{Provider: "s3"}, "object"},
 		{"provider gcs auto-detect", Volume{Provider: "gcs"}, "object"},
 		{"provider azure auto-detect", Volume{Provider: "azure"}, "object"},
-		{"named volume defaults to network", Volume{Provider: "volume", Name: "mydata"}, "network"},
+		{"github auto-detect", Volume{Provider: "github", GitRepo: "owner/repo"}, "network"},
+		{"git auto-detect", Volume{Provider: "git", GitRepo: "owner/repo"}, "network"},
 		{"empty defaults to network", Volume{}, "network"},
 	}
 
