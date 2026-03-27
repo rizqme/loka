@@ -323,7 +323,7 @@ func (m *Manager) findSupervisor() string {
 }
 
 // createExt4FromDir creates an ext4 image from a directory.
-// Uses Lima shell on macOS (mkfs.ext4 not available natively).
+// Requires mkfs.ext4 (install e2fsprogs on macOS: brew install e2fsprogs).
 // Falls back to local mkfs.ext4 on Linux.
 func (m *Manager) createExt4FromDir(ctx context.Context, srcDir, dstPath string, contentSize int64) error {
 	// Size: content + 20% overhead for ext4 metadata, minimum 64MB.
@@ -340,12 +340,7 @@ func (m *Manager) createExt4FromDir(ctx context.Context, srcDir, dstPath string,
 		return m.createExt4Local(ctx, srcDir, dstPath, sizeMB)
 	}
 
-	// macOS: use Lima shell.
-	if _, err := exec.LookPath("limactl"); err == nil {
-		return m.createExt4Lima(ctx, srcDir, dstPath, sizeMB)
-	}
-
-	return fmt.Errorf("no mkfs.ext4 or limactl available — cannot create ext4 image")
+	return fmt.Errorf("mkfs.ext4 not found — install e2fsprogs (brew install e2fsprogs on macOS)")
 }
 
 func (m *Manager) createExt4Local(ctx context.Context, srcDir, dstPath string, sizeMB int64) error {
@@ -366,79 +361,6 @@ func (m *Manager) createExt4Local(ctx context.Context, srcDir, dstPath string, s
 	if err := exec.CommandContext(ctx, "cp", "-a", srcDir+"/.", mountDir+"/").Run(); err != nil {
 		return fmt.Errorf("cp: %w", err)
 	}
-	return nil
-}
-
-func (m *Manager) createExt4Lima(ctx context.Context, srcDir, dstPath string, sizeMB int64) error {
-	// Find a running Lima instance.
-	out, err := exec.CommandContext(ctx, "limactl", "list", "--format", "{{.Name}}").Output()
-	if err != nil {
-		return fmt.Errorf("limactl list: %w", err)
-	}
-	limaVM := ""
-	for _, name := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if name != "" {
-			limaVM = name
-			break
-		}
-	}
-	if limaVM == "" {
-		return fmt.Errorf("no Lima VM available for ext4 creation")
-	}
-
-	// Lima host mounts are read-only. Work in Lima's /tmp:
-	// 1. tar source dir → pipe into Lima → extract in /tmp
-	// 2. Create ext4 in /tmp, mount, copy, unmount
-	// 3. cat ext4 from Lima → pipe to host dstPath
-	remoteDir := fmt.Sprintf("/tmp/loka-ext4-%d", os.Getpid())
-	remoteExt4 := remoteDir + "/rootfs.ext4"
-
-	// Pipe source dir into Lima.
-	tarCmd := exec.CommandContext(ctx, "tar", "cf", "-", "-C", srcDir, ".")
-	limaExtract := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--",
-		"bash", "-c", fmt.Sprintf("rm -rf %s && mkdir -p %s/src && tar xf - -C %s/src", remoteDir, remoteDir, remoteDir))
-	limaExtract.Stdin, _ = tarCmd.StdoutPipe()
-	if err := limaExtract.Start(); err != nil {
-		return fmt.Errorf("start lima extract: %w", err)
-	}
-	if err := tarCmd.Run(); err != nil {
-		return fmt.Errorf("tar source: %w", err)
-	}
-	if err := limaExtract.Wait(); err != nil {
-		return fmt.Errorf("lima extract: %w", err)
-	}
-
-	// Create ext4 in Lima.
-	script := fmt.Sprintf(`
-set -e
-dd if=/dev/zero of=%s bs=1M count=0 seek=%d 2>/dev/null
-mkfs.ext4 -F -q %s
-MOUNT=$(mktemp -d)
-sudo mount -o loop %s $MOUNT
-sudo cp -a %s/src/. $MOUNT/
-sudo umount $MOUNT
-rmdir $MOUNT
-`, remoteExt4, sizeMB, remoteExt4, remoteExt4, remoteDir)
-
-	if output, err := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "bash", "-c", script).CombinedOutput(); err != nil {
-		return fmt.Errorf("lima ext4 creation: %w: %s", err, string(output))
-	}
-
-	// Copy ext4 back to host.
-	catCmd := exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "cat", remoteExt4)
-	outFile, err := os.Create(dstPath)
-	if err != nil {
-		return fmt.Errorf("create output: %w", err)
-	}
-	catCmd.Stdout = outFile
-	if err := catCmd.Run(); err != nil {
-		outFile.Close()
-		return fmt.Errorf("copy ext4 from lima: %w", err)
-	}
-	outFile.Close()
-
-	// Cleanup remote.
-	exec.CommandContext(ctx, "limactl", "shell", limaVM, "--", "rm", "-rf", remoteDir).Run()
 	return nil
 }
 

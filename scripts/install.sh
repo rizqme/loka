@@ -1,10 +1,16 @@
 #!/usr/bin/env bash
 # ──────────────────────────────────────────────────────────
 #  LOKA Installer
-#  Usage: curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 #
-#  On Linux:  installs binaries + Cloud Hypervisor + kernel + initramfs
-#  On macOS:  installs binaries (lokad uses Apple Virtualization Framework)
+#  Online:  curl -fsSL https://vyprai.github.io/loka/install.sh | bash
+#  Local:   ./install.sh --local /path/to/release/dir
+#
+#  Environment variables:
+#    LOKA_VERSION       Release version (default: latest)
+#    LOKA_INSTALL_DIR   Binary install dir (default: /usr/local/bin)
+#    LOKA_DATA_DIR      Data directory (default: /var/loka)
+#    LOKA_LOCAL_DIR     Path to extracted release dir (skip download)
+#    CH_VERSION         Cloud Hypervisor version (default: v44.0)
 # ──────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -12,6 +18,24 @@ VERSION="${LOKA_VERSION:-latest}"
 INSTALL_DIR="${LOKA_INSTALL_DIR:-/usr/local/bin}"
 DATA_DIR="${LOKA_DATA_DIR:-/var/loka}"
 CH_VERSION="${CH_VERSION:-v44.0}"
+LOCAL_DIR="${LOKA_LOCAL_DIR:-}"
+
+# Parse --local flag.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --local)
+      LOCAL_DIR="$2"
+      shift 2
+      ;;
+    --local=*)
+      LOCAL_DIR="${1#--local=}"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
 
 # ── Helpers ───────────────────────────────────────────────
 
@@ -92,52 +116,80 @@ detect_platform() {
 
 # ── Download LOKA binaries ───────────────────────────────
 
-download_binaries() {
-  local target_os="${1:-$OS}"
-  local target_arch="${2:-$ARCH}"
-  local target_dir="${3:-}"
-  local platform="${target_os}-${target_arch}"
+download_and_install() {
+  local pkg_dir=""
+  local tmp=""
 
-  local url
-  if [ "$VERSION" = "latest" ]; then
-    url="https://github.com/vyprai/loka/releases/latest/download/loka-${platform}.tar.gz"
+  # If --local was given, use that directory directly (no download).
+  if [ -n "$LOCAL_DIR" ]; then
+    if [ ! -d "$LOCAL_DIR" ]; then
+      fail "Local directory not found: $LOCAL_DIR"
+    fi
+    pkg_dir="$LOCAL_DIR"
+    info "Installing from local directory: $LOCAL_DIR"
   else
-    url="https://github.com/vyprai/loka/releases/download/${VERSION}/loka-${platform}.tar.gz"
-  fi
+    local platform="${OS}-${ARCH}"
+    local url
+    if [ "$VERSION" = "latest" ]; then
+      url="https://github.com/vyprai/loka/releases/latest/download/loka-${platform}.tar.gz"
+    else
+      url="https://github.com/vyprai/loka/releases/download/${VERSION}/loka-${platform}.tar.gz"
+    fi
 
-  local tmp
-  tmp=$(mktemp -d)
+    tmp=$(mktemp -d)
 
-  info "Downloading loka-${platform}.tar.gz ..."
+    info "Downloading loka-${platform}.tar.gz ..."
 
-  if curl -fsSL "$url" -o "$tmp/loka.tar.gz" 2>/dev/null; then
-    tar -xzf "$tmp/loka.tar.gz" -C "$tmp"
-  else
-    warn "Pre-built binary not found. Building from source..."
-    need_cmd go
-    need_cmd git
-
-    git clone --depth 1 https://github.com/vyprai/loka "$tmp/loka-src" 2>/dev/null
-    cd "$tmp/loka-src"
-    GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/lokad" ./cmd/lokad
-    GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/loka-supervisor" ./cmd/loka-supervisor
-    GOOS=$target_os GOARCH=$target_arch go build -trimpath -ldflags "-s -w" -o "$tmp/loka" ./cmd/loka
-    cd - >/dev/null
-  fi
-
-  if [ -n "$target_dir" ]; then
-    cp "$tmp"/{lokad,loka-supervisor,loka} "$target_dir/" 2>/dev/null || true
-  else
-    local bins=("lokad" "loka-supervisor" "loka")
-    for bin in "${bins[@]}"; do
-      if [ -f "$tmp/$bin" ]; then
-        $SUDO install -m 755 "$tmp/$bin" "${INSTALL_DIR}/$bin"
-        ok "$bin → ${INSTALL_DIR}/$bin"
+    if curl -fsSL "$url" -o "$tmp/loka.tar.gz" 2>/dev/null; then
+      tar -xzf "$tmp/loka.tar.gz" -C "$tmp"
+      # Find the extracted directory (loka-<platform>/).
+      pkg_dir=$(find "$tmp" -maxdepth 1 -type d -name "loka-*" | head -1)
+      if [ -z "$pkg_dir" ]; then
+        pkg_dir="$tmp"
       fi
-    done
+    else
+      warn "Pre-built release not found. Building from source..."
+      need_cmd go
+      need_cmd git
+
+      git clone --depth 1 https://github.com/vyprai/loka "$tmp/loka-src" 2>/dev/null
+      cd "$tmp/loka-src"
+      GOOS=$OS GOARCH=$ARCH go build -trimpath -ldflags "-s -w" -o "$tmp/lokad" ./cmd/lokad
+      GOOS=$OS GOARCH=$ARCH go build -trimpath -ldflags "-s -w" -o "$tmp/loka-supervisor" ./cmd/loka-supervisor
+      GOOS=$OS GOARCH=$ARCH go build -trimpath -ldflags "-s -w" -o "$tmp/loka" ./cmd/loka
+      cd - >/dev/null
+      pkg_dir="$tmp"
+    fi
   fi
 
-  rm -rf "$tmp"
+  # Install binaries.
+  info "Installing binaries to ${INSTALL_DIR}"
+  for bin in lokad loka-supervisor loka; do
+    if [ -f "$pkg_dir/$bin" ]; then
+      $SUDO install -m 755 "$pkg_dir/$bin" "${INSTALL_DIR}/$bin"
+      ok "$bin → ${INSTALL_DIR}/$bin"
+    fi
+  done
+
+  # Install VM assets (kernel + initramfs) from the release package.
+  local vm_dir="$HOME/.loka/vm"
+  mkdir -p "$vm_dir"
+  if [ -d "$pkg_dir/vm" ]; then
+    info "Installing VM assets"
+    if [ -f "$pkg_dir/vm/vmlinux-lokavm" ]; then
+      cp "$pkg_dir/vm/vmlinux-lokavm" "$vm_dir/vmlinux-lokavm"
+      ok "kernel → $vm_dir/vmlinux-lokavm"
+    fi
+    if [ -f "$pkg_dir/vm/initramfs.cpio.gz" ]; then
+      cp "$pkg_dir/vm/initramfs.cpio.gz" "$vm_dir/initramfs.cpio.gz"
+      ok "initramfs → $vm_dir/initramfs.cpio.gz"
+    fi
+  else
+    warn "Release package does not contain VM assets"
+    warn "Build from source: make kernel && make initramfs"
+  fi
+
+  if [ -n "$tmp" ]; then rm -rf "$tmp"; fi
 }
 
 # ── Install Cloud Hypervisor (Linux only) ────────────────
@@ -169,35 +221,7 @@ install_cloud_hypervisor() {
   rm -rf "$tmp"
 }
 
-# ── Install VM assets (kernel + initramfs) ───────────────
-
-install_vm_assets() {
-  local vm_dir="$HOME/.loka/vm"
-  mkdir -p "$vm_dir"
-
-  info "Installing VM assets"
-
-  local kernel_url initrd_url
-  if [ "$VERSION" = "latest" ]; then
-    kernel_url="https://github.com/vyprai/loka/releases/latest/download/vmlinux-lokavm-${ARCH}"
-    initrd_url="https://github.com/vyprai/loka/releases/latest/download/initramfs-${ARCH}.cpio.gz"
-  else
-    kernel_url="https://github.com/vyprai/loka/releases/download/${VERSION}/vmlinux-lokavm-${ARCH}"
-    initrd_url="https://github.com/vyprai/loka/releases/download/${VERSION}/initramfs-${ARCH}.cpio.gz"
-  fi
-
-  if curl -fsSL "$kernel_url" -o "$vm_dir/vmlinux-lokavm" 2>/dev/null; then
-    ok "kernel → $vm_dir/vmlinux-lokavm"
-  else
-    warn "Kernel not found in release. Build from source: make kernel"
-  fi
-
-  if curl -fsSL "$initrd_url" -o "$vm_dir/initramfs.cpio.gz" 2>/dev/null; then
-    ok "initramfs → $vm_dir/initramfs.cpio.gz"
-  else
-    warn "Initramfs not found in release. Build from source: make kernel"
-  fi
-}
+    # VM assets are included in the release tar.gz and installed by download_and_install().
 
 # ── Install Linux dependencies ───────────────────────────
 
@@ -283,14 +307,10 @@ install_linux() {
   install_linux_deps
   echo ""
 
-  info "Installing LOKA binaries to ${INSTALL_DIR}"
-  download_binaries
+  download_and_install
   echo ""
 
   install_cloud_hypervisor
-  echo ""
-
-  install_vm_assets
   echo ""
 
   # Data dirs.
@@ -352,11 +372,7 @@ install_macos() {
   info "Installing LOKA for macOS (Apple Virtualization Framework)"
 
   echo ""
-  info "Installing binaries to ${INSTALL_DIR}"
-  download_binaries
-
-  echo ""
-  install_vm_assets
+  download_and_install
 
   # Sign lokad with VZ entitlement.
   if [ -f "${INSTALL_DIR}/lokad" ]; then

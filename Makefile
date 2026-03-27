@@ -1,5 +1,5 @@
 .PHONY: all build build-linux build-linux-amd64 build-linux-arm64 build-all proto clean test test-unit test-integration lint fmt help \
-       install uninstall install-vm-assets install-cloud-hypervisor e2e-test kernel kernel-update
+       install uninstall install-vm-assets install-cloud-hypervisor e2e-test e2e-test-linux kernel initramfs kernel-all kernel-update release
 
 # Variables
 GO := go
@@ -13,6 +13,11 @@ LDFLAGS := -ldflags "-s -w -X github.com/vyprai/loka/pkg/version.Version=$(VERSI
 UNAME_S := $(shell uname -s)
 UNAME_M := $(shell uname -m)
 
+# Suppress macOS linker warning about duplicate -lobjc from Code-Hex/vz CGo.
+ifeq ($(UNAME_S),Darwin)
+export CGO_LDFLAGS += -Wl,-no_warn_duplicate_libraries
+endif
+
 # Cloud Hypervisor version (Linux VMM)
 CH_VERSION ?= v44.0
 
@@ -23,6 +28,7 @@ LOKA_WORKER := $(BIN_DIR)/loka-worker
 LOKA_SUPERVISOR := $(BIN_DIR)/loka-supervisor
 LOKA_VMAGENT := $(BIN_DIR)/loka-vmagent
 LOKA_CLI := $(BIN_DIR)/loka
+LOKA_BUILD := $(BIN_DIR)/loka-build
 
 # Default target
 all: build
@@ -50,6 +56,14 @@ $(LOKA_VMAGENT):
 
 $(LOKA_CLI):
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $@ ./cmd/loka
+
+$(LOKA_BUILD):
+	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $@ ./cmd/loka-build
+ifeq ($(UNAME_S),Darwin)
+	@printf '<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>' > /tmp/loka-build.entitlements
+	@codesign --entitlements /tmp/loka-build.entitlements --force -s - $@ 2>/dev/null || true
+	@rm -f /tmp/loka-build.entitlements
+endif
 
 # Build for Linux amd64 (cross-compile)
 build-linux-amd64:
@@ -130,21 +144,40 @@ install-vm-assets:
 		echo "  ! build/initramfs.cpio.gz not found — run 'make kernel' first"; \
 	fi
 
-# Install LOKA locally from source
+# Install LOKA locally from source.
+# Installs binaries + kernel + initramfs + Cloud Hypervisor (Linux).
 INSTALL_DIR ?= /usr/local/bin
-install: build install-vm-assets
+install: build
 	@echo "==> Installing LOKA"
 	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
 	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
 	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
+	@# Install kernel + initramfs to ~/.loka/vm/.
+	@mkdir -p $(HOME)/.loka/vm
+	@if [ -f build/vmlinux-lokavm ]; then \
+		cp build/vmlinux-lokavm $(HOME)/.loka/vm/vmlinux-lokavm; \
+		echo "  kernel → ~/.loka/vm/vmlinux-lokavm"; \
+	else \
+		echo "  ⚠ build/vmlinux-lokavm not found — run 'make kernel' first"; \
+	fi
+	@if [ -f build/initramfs.cpio.gz ]; then \
+		cp build/initramfs.cpio.gz $(HOME)/.loka/vm/initramfs.cpio.gz; \
+		echo "  initramfs → ~/.loka/vm/initramfs.cpio.gz"; \
+	else \
+		echo "  ⚠ build/initramfs.cpio.gz not found — run 'make initramfs' first"; \
+	fi
 ifeq ($(UNAME_S),Linux)
-	@# On Linux, also install Cloud Hypervisor if not present.
 	@if ! command -v cloud-hypervisor >/dev/null 2>&1; then \
 		echo "  Cloud Hypervisor not found — installing..."; \
 		$(MAKE) install-cloud-hypervisor; \
 	else \
 		echo "  cloud-hypervisor already installed"; \
 	fi
+endif
+ifeq ($(UNAME_S),Darwin)
+	@# Sign lokad with VZ entitlement (needed for Apple Virtualization Framework).
+	@codesign --entitlements /dev/stdin --force -s - $(INSTALL_DIR)/lokad 2>/dev/null <<< \
+		'<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>' || true
 endif
 	@echo "  LOKA installed. Run: lokad"
 
@@ -155,22 +188,75 @@ uninstall:
 	-rm -rf $(HOME)/.loka
 	@echo "  LOKA uninstalled"
 
-# Build custom Linux kernel for lokavm
-kernel:
-	bash scripts/build-kernel-lokavm.sh
+# Create release package (tar.gz) with all files needed to run.
+# Usage: make release GOOS=linux GOARCH=arm64
+RELEASE_GOOS ?= $(shell go env GOOS)
+RELEASE_GOARCH ?= $(shell go env GOARCH)
+RELEASE_DIR := release/loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH)
+
+release: build
+	@echo "==> Creating release package: loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH).tar.gz"
+	@rm -rf $(RELEASE_DIR)
+	@mkdir -p $(RELEASE_DIR)/vm
+	@# Binaries.
+	@cp $(LOKA_CLI) $(RELEASE_DIR)/loka
+	@cp $(LOKAD) $(RELEASE_DIR)/lokad
+	@cp $(LOKA_SUPERVISOR) $(RELEASE_DIR)/loka-supervisor
+	@# Kernel + initramfs (required for VM boot).
+	@if [ -f build/vmlinux-lokavm ]; then \
+		cp build/vmlinux-lokavm $(RELEASE_DIR)/vm/vmlinux-lokavm; \
+	else \
+		echo "  ⚠ build/vmlinux-lokavm not found — release package incomplete"; \
+	fi
+	@if [ -f build/initramfs.cpio.gz ]; then \
+		cp build/initramfs.cpio.gz $(RELEASE_DIR)/vm/initramfs.cpio.gz; \
+	else \
+		echo "  ⚠ build/initramfs.cpio.gz not found — release package incomplete"; \
+	fi
+	@# Install script.
+	@cp scripts/install.sh $(RELEASE_DIR)/install.sh
+	@# Pack.
+	@cd release && tar -czf loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH).tar.gz loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH)/
+	@rm -rf $(RELEASE_DIR)
+	@ls -lh release/loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH).tar.gz
+	@echo "  Release package ready"
+
+# Build custom Linux kernel for lokavm (uses loka-build, not Lima)
+kernel: $(LOKA_BUILD)
+	@if [ -f build/vmlinux-lokavm ]; then \
+		echo "  kernel exists (build/vmlinux-lokavm), skipping. Delete to rebuild."; \
+	else \
+		$(LOKA_BUILD) kernel --arch=$(UNAME_M); \
+	fi
+
+# Build initramfs for lokavm
+initramfs: $(LOKA_BUILD)
+	@if [ -f build/initramfs.cpio.gz ]; then \
+		echo "  initramfs exists (build/initramfs.cpio.gz), skipping. Delete to rebuild."; \
+	else \
+		$(LOKA_BUILD) initramfs --arch=$(UNAME_M); \
+	fi
+
+# Build both kernel and initramfs
+kernel-all: $(LOKA_BUILD)
+	$(LOKA_BUILD) all --arch=$(UNAME_M)
 
 # Check kernel.org for latest stable and update pinned version
 kernel-update:
 	@echo "==> Checking latest stable kernel..."
 	@LATEST=$$(curl -s https://www.kernel.org/ | grep -oP 'linux-\K[0-9]+\.[0-9]+\.[0-9]+' | head -1) && \
 	echo "    Latest: $$LATEST" && \
-	sed -i.bak "s/^PINNED_VERSION=.*/PINNED_VERSION=\"$$LATEST\"/" scripts/build-kernel-lokavm.sh && \
-	rm -f scripts/build-kernel-lokavm.sh.bak && \
+	sed -i.bak "s/^defaultKernelVersion = .*/defaultKernelVersion = \"$$LATEST\"/" cmd/loka-build/main.go && \
+	rm -f cmd/loka-build/main.go.bak && \
 	echo "    Updated to $$LATEST"
 
-# Run E2E test suite
+# Run E2E test suite (native — requires KVM on Linux or VZ on macOS)
 e2e-test: build
 	bash scripts/e2e-test.sh
+
+# Run E2E test suite in a Linux VM (from macOS or CI — uses loka-build)
+e2e-test-linux: $(LOKA_BUILD) build-linux-arm64
+	$(LOKA_BUILD) e2e --arch=arm64
 
 # Lint
 lint:
@@ -199,9 +285,13 @@ help:
 	@echo "  install-cloud-hypervisor  Install Cloud Hypervisor (Linux VMM)"
 	@echo "  install-vm-assets    Install kernel + initramfs to ~/.loka/vm/"
 	@echo "  uninstall            Remove LOKA and all data"
-	@echo "  e2e-test             Run E2E test suite"
-	@echo "  kernel               Build custom Linux kernel for lokavm"
+	@echo "  e2e-test             Run E2E test suite (native)"
+	@echo "  e2e-test-linux       Run E2E in Linux VM (from macOS/CI)"
+	@echo "  kernel               Build Linux kernel (uses loka-build VM)"
+	@echo "  initramfs            Build initramfs (uses loka-build VM)"
+	@echo "  kernel-all           Build both kernel + initramfs"
 	@echo "  kernel-update        Update pinned kernel version to latest stable"
+	@echo "  release              Create release tar.gz with binaries + kernel + initramfs"
 	@echo "  proto                Generate protobuf code"
 	@echo "  test                 Run all tests (unit)"
 	@echo "  lint                 Run linter"
