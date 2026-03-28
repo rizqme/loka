@@ -1,0 +1,105 @@
+---
+title: Services
+description: Managing deployed services
+---
+
+# Services
+
+A service is a deployed application running in one or more microVM instances. Services are created via `loka deploy` and managed via `loka service`.
+
+## List services
+
+```bash
+loka service list
+```
+
+Output shows all services with their status, image, component count, and domain:
+
+```
+NAME        STATUS    COMPONENTS  IMAGE            DOMAIN
+my-app      running   1           nginx:latest     my-app.loka
+backend     running   3           -                backend.loka
+```
+
+## Service details
+
+```bash
+loka service get my-app
+```
+
+Shows detailed information including components, instances, ports, environment variables, and health status.
+
+For multi-component services, each component is displayed with its own status:
+
+```
+Service: backend
+Components:
+  web      running   node:20           port:3000   web.backend.loka
+  api      running   python:3.12-slim  port:8000   api.backend.loka
+  worker   running   python:3.12-slim  -           -
+```
+
+## Logs
+
+```bash
+loka service logs my-app                   # Tail logs for all components
+loka service logs my-app --component web   # Logs for a specific component
+loka service logs my-app --follow          # Follow log output
+loka service logs my-app --lines 100       # Last 100 lines
+```
+
+## Stop and start
+
+```bash
+loka service stop my-app                   # Stop (instances remain, not running)
+loka service start my-app                  # Restart stopped service
+```
+
+## Remove
+
+```bash
+loka service rm my-app                     # Remove service and all instances
+```
+
+## Redeploy
+
+Redeploy a service with its current configuration (pulls latest image if applicable):
+
+```bash
+loka service redeploy my-app
+```
+
+## Environment variables
+
+View and modify environment variables for a running service:
+
+```bash
+loka service env my-app                    # Show all env vars
+loka service env my-app --set KEY=VALUE    # Set a variable (triggers redeploy)
+loka service env my-app --unset KEY        # Remove a variable
+```
+
+## Instances
+
+Each service has one or more running instances (microVMs). View all instances across services and sessions:
+
+```bash
+loka instance list                         # Unified view of all instances
+loka instance rm <id>                      # Remove a specific instance
+```
+
+## Shell into a service
+
+Open an interactive shell into a service instance:
+
+```bash
+loka shell --service my-app                # Shell into the service's instance
+loka shell --service backend --component api  # Shell into a specific component
+```
+
+## Next steps
+
+- [Deploying Applications](/deploy-apps) -- how to deploy services
+- [Domains & DNS](/domains) -- routing traffic to services
+- [Volumes](/volumes) -- persistent storage for services
+- [loka.yaml Reference](/loka-yaml) -- project configuration format

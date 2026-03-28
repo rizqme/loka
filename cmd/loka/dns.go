@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -38,23 +41,33 @@ func newDNSEnableCmd() *cobra.Command {
 				return err
 			}
 
-			// 2. Enable domain proxy + DNS on the server.
+			// 2. Set up port forwarding (80,443 → 6843) so .loka works without port.
+			if runtime.GOOS == "darwin" {
+				setupPortProxy()
+			}
+
+			// 3. Enable domain proxy + DNS on the server.
 			client := newClient()
 			var resp map[string]any
 			if err := client.Raw(cmd.Context(), "POST", "/api/v1/admin/dns", map[string]any{"enabled": true}, &resp); err != nil {
 				fmt.Fprintf(os.Stderr, "Warning: could not enable DNS on server: %v\n", err)
-				fmt.Fprintf(os.Stderr, "The resolver is configured but the DNS server may not be running.\n")
-				fmt.Fprintf(os.Stderr, "Ensure lokad is running with domain.dns_enabled: true in the config.\n")
+				fmt.Fprintf(os.Stderr, "Ensure lokad is running.\n")
 			} else {
 				fmt.Println("DNS server enabled on lokad.")
 			}
 
+			// 4. Trust the CA certificate for HTTPS without warnings.
+			if runtime.GOOS == "darwin" {
+				trustCACert()
+			}
+
 			fmt.Println("DNS resolution for .loka domains is now enabled.")
-			fmt.Println("  *.loka -> 127.0.0.1 (via port 5453)")
+			fmt.Println("  *.loka -> 127.0.0.1")
+			fmt.Println("  http://*.loka  (port 80 → 6843)")
+			fmt.Println("  https://*.loka (port 443 → 6843)")
 			fmt.Println()
 			fmt.Println("Test it:")
-			fmt.Println("  dig @127.0.0.1 -p 5453 test.loka")
-			fmt.Println("  curl http://my-app.loka:6843")
+			fmt.Println("  curl http://my-app.loka/")
 			return nil
 		},
 	}
@@ -131,6 +144,159 @@ func newDNSStatusCmd() *cobra.Command {
 	}
 }
 
+// isDNSEnabled checks if .loka DNS resolution is configured (resolver file exists + server responding).
+func isDNSEnabled() bool {
+	if _, err := os.Stat(resolverFilePath()); err != nil {
+		return false
+	}
+	out, err := exec.Command("dig", "@127.0.0.1", "-p", "5453", "test.loka", "+short", "+time=1", "+tries=1").Output()
+	return err == nil && len(strings.TrimSpace(string(out))) > 0
+}
+
+// enableDNS sets up the resolver file, port forwarding, and enables DNS on the server.
+func enableDNS() bool {
+	if err := createResolverConfig(); err != nil {
+		fmt.Fprintf(os.Stderr, "  DNS setup failed: %v\n", err)
+		return false
+	}
+	if runtime.GOOS == "darwin" {
+		setupPortProxy()
+	}
+	client := newClient()
+	ctx := context.Background()
+	client.Raw(ctx, "POST", "/api/v1/admin/dns", map[string]any{"enabled": true}, nil)
+	// Verify it works.
+	for i := 0; i < 10; i++ {
+		if isDNSEnabled() {
+			return true
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	return false
+}
+
+// setupPortProxy starts loka-proxy on ports 80/443 as root (via osascript),
+// forwarding to the domain proxy on port 6843.
+func setupPortProxy() {
+	// Check if already running.
+	pidFile := proxyPidFile()
+	if data, err := os.ReadFile(pidFile); err == nil {
+		pid := strings.TrimSpace(string(data))
+		if pid != "" {
+			// Check if process is alive.
+			if err := exec.Command("kill", "-0", pid).Run(); err == nil {
+				return // Already running.
+			}
+		}
+	}
+
+	// Find loka-proxy binary.
+	proxyBin := findLokaProxy()
+	if proxyBin == "" {
+		fmt.Fprintf(os.Stderr, "  loka-proxy not found, skipping port 80/443 setup\n")
+		return
+	}
+
+	// Find TLS certs for HTTPS.
+	home, _ := os.UserHomeDir()
+	certFile := filepath.Join(home, ".loka", "tls", "server.crt")
+	keyFile := filepath.Join(home, ".loka", "tls", "server.key")
+	// Also check /tmp/loka-data
+	if _, err := os.Stat(certFile); err != nil {
+		certFile = "/tmp/loka-data/tls/server.crt"
+		keyFile = "/tmp/loka-data/tls/server.key"
+	}
+
+	args := fmt.Sprintf("%s -target 127.0.0.1:6843 -pid %s", proxyBin, pidFile)
+	if _, err := os.Stat(certFile); err == nil {
+		args += fmt.Sprintf(" -cert %s -key %s", certFile, keyFile)
+	}
+
+	fmt.Println("Starting port proxy (80,443 → 6843, requires sudo)...")
+	cmd := exec.Command("sudo", "sh", "-c", args+" &")
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
+
+	// Wait briefly for it to start.
+	time.Sleep(1 * time.Second)
+}
+
+// stopPortProxy stops the loka-proxy process.
+func stopPortProxy() {
+	pidFile := proxyPidFile()
+	data, err := os.ReadFile(pidFile)
+	if err != nil {
+		return
+	}
+	pid := strings.TrimSpace(string(data))
+	if pid != "" {
+		exec.Command("kill", pid).Run()
+	}
+	os.Remove(pidFile)
+}
+
+func proxyPidFile() string {
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".loka", "proxy.pid")
+}
+
+// trustCACert imports the LOKA CA certificate into the macOS login keychain
+// as a trusted root CA, so HTTPS connections to *.loka don't show warnings.
+func trustCACert() {
+	home, _ := os.UserHomeDir()
+	candidates := []string{
+		filepath.Join(home, ".loka", "tls", "ca.crt"),
+		"/tmp/loka-data/tls/ca.crt",
+	}
+	var caCert string
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			caCert = c
+			break
+		}
+	}
+	if caCert == "" {
+		return
+	}
+
+	// Check if already trusted in System keychain.
+	out, _ := exec.Command("security", "find-certificate", "-c", "LOKA", "-a",
+		"/Library/Keychains/System.keychain").Output()
+	if strings.Contains(string(out), "LOKA") {
+		return // Already trusted.
+	}
+
+	fmt.Println("Trusting LOKA CA certificate for HTTPS (requires sudo)...")
+	cmd := exec.Command("sudo", "security", "add-trusted-cert", "-d", "-r", "trustRoot",
+		"-p", "ssl", "-k", "/Library/Keychains/System.keychain", caCert)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Run()
+}
+
+func findLokaProxy() string {
+	// Check next to loka binary.
+	if self, err := os.Executable(); err == nil {
+		candidate := filepath.Join(filepath.Dir(self), "loka-proxy")
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	candidates := []string{
+		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "loka-proxy"),
+		"loka-proxy",
+	}
+	for _, p := range candidates {
+		if path, err := exec.LookPath(p); err == nil {
+			return path
+		}
+	}
+	return ""
+}
+
 // resolverFilePath returns the path to the OS-level resolver configuration.
 func resolverFilePath() string {
 	if runtime.GOOS == "linux" {
@@ -168,7 +334,7 @@ func createResolverConfig() error {
 	return writeSudoFile(path, content)
 }
 
-// removeResolverConfig removes the OS-level DNS resolver config.
+// removeResolverConfig removes the OS-level DNS resolver config and port forward.
 func removeResolverConfig() error {
 	path := resolverFilePath()
 	if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -177,6 +343,10 @@ func removeResolverConfig() error {
 	fmt.Printf("Removing %s (requires sudo)...\n", path)
 	if err := exec.Command("sudo", "rm", "-f", path).Run(); err != nil {
 		return fmt.Errorf("failed to remove %s: %w", path, err)
+	}
+
+	if runtime.GOOS == "darwin" {
+		stopPortProxy()
 	}
 
 	// If systemd-resolved, restart it.

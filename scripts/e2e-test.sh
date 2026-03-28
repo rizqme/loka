@@ -779,9 +779,9 @@ if [ "$VM_AVAILABLE" = true ] && [ "$KERNEL_AVAILABLE" = true ]; then
   if [ -n "$DE_SID" ]; then
     # Expose
     DE_EX=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/sessions/$DE_SID/expose" \
-      -H 'Content-Type: application/json' -d '{"subdomain":"e2e-app","remote_port":5000}')
+      -H 'Content-Type: application/json' -d '{"domain":"e2e-app","remote_port":5000}')
     DE_CODE=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions/$DE_SID/expose" \
-      -H 'Content-Type: application/json' -d '{"subdomain":"e2e-app2","remote_port":8080}')
+      -H 'Content-Type: application/json' -d '{"domain":"e2e-app2","remote_port":8080}')
     [ "$DE_CODE" = "201" ] && pass "Expose session (HTTP 201)" || pass "Expose session (HTTP $DE_CODE)"
 
     # List domains
@@ -1673,7 +1673,7 @@ SVC_ENV_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X PUT "$ENDPOINT/
 
 # Add route
 SVC_ROUTE_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$SVC_ID/routes" \
-  -H "Content-Type: application/json" -d "{\"subdomain\":\"svc-$RUN_ID\",\"port\":8080}")
+  -H "Content-Type: application/json" -d "{\"domain\":\"svc-$RUN_ID\",\"port\":8080}")
 [ "$SVC_ROUTE_HTTP" = "200" ] || [ "$SVC_ROUTE_HTTP" = "201" ] && \
   pass "Service add route (HTTP $SVC_ROUTE_HTTP)" || pass "Service add route (HTTP $SVC_ROUTE_HTTP)"
 
@@ -1807,7 +1807,7 @@ EXP_ID=$(echo "$EXP_SESS" | python3 -c "import sys,json; print(json.load(sys.std
 
 # Expose session
 EXP_HTTP=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/sessions/$EXP_ID/expose" \
-  -H "Content-Type: application/json" -d '{"subdomain":"e2e-exposed","remote_port":8080}')
+  -H "Content-Type: application/json" -d '{"domain":"e2e-exposed","remote_port":8080}')
 [ "$EXP_HTTP" = "200" ] || [ "$EXP_HTTP" = "201" ] && \
   pass "Expose session (HTTP $EXP_HTTP)" || pass "Expose session (HTTP $EXP_HTTP — proxy may not be enabled)"
 
@@ -1819,7 +1819,7 @@ pass "Unexpose session (HTTP $UNEXP_HTTP)"
 curl $CURL_OPTS -o /dev/null -X DELETE "$ENDPOINT/api/v1/sessions/$EXP_ID" 2>/dev/null
 
 # Deploy service with route and verify in domains list
-SVC_DOM_BODY="{\"name\":\"dom-$RUN_ID\",\"image\":\"python:3.12-slim\",\"command\":\"echo\",\"args\":[\"hi\"],\"port\":3000,\"routes\":[{\"subdomain\":\"e2e-dom\",\"port\":3000}]}"
+SVC_DOM_BODY="{\"name\":\"dom-$RUN_ID\",\"image\":\"python:3.12-slim\",\"command\":\"echo\",\"args\":[\"hi\"],\"port\":3000,\"routes\":[{\"domain\":\"e2e-dom\",\"port\":3000}]}"
 SVC_DOM_RESP=$(curl $CURL_OPTS -X POST "$ENDPOINT/api/v1/services" \
   -H "Content-Type: application/json" -d "$SVC_DOM_BODY")
 SVC_DOM_ID=$(echo "$SVC_DOM_RESP" | python3 -c "import sys,json; print(json.load(sys.stdin).get('ID',''))" 2>/dev/null)
@@ -2041,7 +2041,7 @@ fi
 # macOS: lokad should still be running from setup local
 
 # All CLI commands explicitly use http (no TLS in test mode)
-CLI_S="--server $ENDPOINT"
+CLI_S="--space $ENDPOINT"
 
 # Connect — auto-fetches CA cert from server if HTTPS
 # Remove stale entry from prior runs to ensure idempotent connect.
@@ -2052,7 +2052,7 @@ echo "$CONNECT_OUT" | grep -q "Connected" && \
 
 # After connect, CLI reads from deployment store (has endpoint + ca_cert)
 CLI_S=""
-[ "$IS_LINUX" = true ] && CLI_S="--server $ENDPOINT"
+[ "$IS_LINUX" = true ] && CLI_S="--space $ENDPOINT"
 
 # Current
 CUR=$("$LOKA_BIN" current 2>&1)
@@ -2266,7 +2266,7 @@ workers:
   - address: $W2_IP
 YAML
 
-  APPLY_OUT=$("$LOKA_BIN" --server "$MW_EP" setup export e2e-multi 2>&1 || echo "no export")
+  APPLY_OUT=$("$LOKA_BIN" --space "$MW_EP" setup export e2e-multi 2>&1 || echo "no export")
   # setup export works if the server was connected
   pass "Deploy YAML created for multi-worker"
 
@@ -2294,17 +2294,17 @@ MP_SVC_ID=$(echo "$MP_SVC" | jf ID)
 if [ -n "$MP_SVC_ID" ]; then
   # Add route on port 8080 (HTTP)
   MP_R1=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$MP_SVC_ID/routes" \
-    -H 'Content-Type: application/json' -d '{"subdomain":"api","port":8080,"protocol":"http"}')
+    -H 'Content-Type: application/json' -d '{"domain":"api","port":8080,"protocol":"http"}')
   [ "$MP_R1" = "201" ] && pass "Route port 8080/http (HTTP $MP_R1)" || fail "Route 8080" "HTTP $MP_R1"
 
   # Add route on port 9090 (gRPC)
   MP_R2=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$MP_SVC_ID/routes" \
-    -H 'Content-Type: application/json' -d '{"subdomain":"grpc","port":9090,"protocol":"grpc"}')
+    -H 'Content-Type: application/json' -d '{"domain":"grpc","port":9090,"protocol":"grpc"}')
   [ "$MP_R2" = "201" ] && pass "Route port 9090/grpc (HTTP $MP_R2)" || fail "Route 9090" "HTTP $MP_R2"
 
   # Add route on port 3000 (TCP)
   MP_R3=$(curl $CURL_OPTS -o /dev/null -w '%{http_code}' -X POST "$ENDPOINT/api/v1/services/$MP_SVC_ID/routes" \
-    -H 'Content-Type: application/json' -d '{"subdomain":"tcp","port":3000,"protocol":"tcp"}')
+    -H 'Content-Type: application/json' -d '{"domain":"tcp","port":3000,"protocol":"tcp"}')
   [ "$MP_R3" = "201" ] && pass "Route port 3000/tcp (HTTP $MP_R3)" || fail "Route 3000" "HTTP $MP_R3"
 
   # List routes — should have 3
@@ -2928,10 +2928,10 @@ if ! curl $CURL_OPTS "$ENDPOINT/api/v1/health" 2>/dev/null | grep -q "ok"; then
   sleep 3
 fi
 
-# On macOS: no --server, read from deployment store (has CA cert).
-# On Linux: explicit --server since no TLS.
+# On macOS: no --space, read from deployment store (has CA cert).
+# On Linux: explicit --space since no TLS.
 CLI_S=""
-[ "$IS_LINUX" = true ] && CLI_S="--server $ENDPOINT"
+[ "$IS_LINUX" = true ] && CLI_S="--space $ENDPOINT"
 
 # Token revoke
 TK_CR=$("$LOKA_BIN" $CLI_S token create --name revoke-me 2>&1)
@@ -2983,7 +2983,7 @@ echo "$WK_TOP" | grep -qi "WORKER\|No workers\|loka" && pass "CLI: worker top" |
 
 # Domains
 DOM=$("$LOKA_BIN" $CLI_S domains 2>&1)
-echo "$DOM" | grep -qi "No domain\|SUBDOMAIN\|route" && pass "CLI: domains" || pass "CLI: domains (output)"
+echo "$DOM" | grep -qi "No domain\|DOMAIN\|route" && pass "CLI: domains" || pass "CLI: domains (output)"
 
 # Provider list
 PROV=$("$LOKA_BIN" $CLI_S provider list 2>&1)

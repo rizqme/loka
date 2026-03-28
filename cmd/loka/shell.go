@@ -10,6 +10,7 @@ import (
 
 	pb "github.com/vyprai/loka/api/lokav1"
 	"github.com/spf13/cobra"
+	"github.com/vyprai/loka/pkg/lokaapi"
 	"golang.org/x/term"
 )
 
@@ -20,18 +21,59 @@ func newShellCmd() *cobra.Command {
 	)
 
 	cmd := &cobra.Command{
-		Use:   "shell <session-id>",
+		Use:   "shell [session-id]",
 		Short: "Open an interactive shell in a session",
 		Long: `Opens an interactive terminal inside a running session VM.
 Supports full PTY: tab completion, arrow keys, Ctrl-C, resize, etc.
 
+If no session ID is given and exactly one session is running, it is selected automatically.
+
 Examples:
+  loka shell                       # Auto-select if one running session
   loka shell <id>                  # Default: /bin/bash
   loka shell <id> --shell /bin/sh
   loka shell <id> --workdir /workspace`,
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			sessionID := args[0]
+			var sessionID string
+			if len(args) == 1 {
+				sessionID = args[0]
+			} else {
+				// Auto-resolve: pick the single running session.
+				client := newClient()
+				resp, err := client.ListSessions(cmd.Context())
+				if err != nil {
+					return fmt.Errorf("cannot list sessions: %w", err)
+				}
+				var running []lokaapi.Session
+				for _, s := range resp.Sessions {
+					if s.Status == "running" {
+						running = append(running, s)
+					}
+				}
+				switch len(running) {
+				case 0:
+					return fmt.Errorf("no running sessions — specify a session ID or create one with: loka session create")
+				case 1:
+					sessionID = running[0].ID
+					name := running[0].Name
+					if name != "" {
+						fmt.Fprintf(os.Stderr, "Auto-selected session: %s (%s)\n", name, shortID(sessionID))
+					} else {
+						fmt.Fprintf(os.Stderr, "Auto-selected session: %s\n", shortID(sessionID))
+					}
+				default:
+					fmt.Fprintf(os.Stderr, "Multiple running sessions — specify one:\n")
+					for _, s := range running {
+						if s.Name != "" {
+							fmt.Fprintf(os.Stderr, "  %s  %s\n", shortID(s.ID), s.Name)
+						} else {
+							fmt.Fprintf(os.Stderr, "  %s\n", shortID(s.ID))
+						}
+					}
+					return fmt.Errorf("ambiguous: %d running sessions", len(running))
+				}
+			}
 			if shell == "" {
 				shell = "/bin/bash"
 			}

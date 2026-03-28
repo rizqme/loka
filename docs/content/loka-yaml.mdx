@@ -1,0 +1,163 @@
+---
+title: loka.yaml Reference
+description: Project configuration file format
+---
+
+# loka.yaml Reference
+
+The `loka.yaml` file defines a multi-component application for deployment with LOKA.
+
+## Basic example
+
+```yaml
+name: my-app
+image: node:20
+command: npm start
+port: 3000
+```
+
+## Multi-component example
+
+```yaml
+name: my-app
+
+components:
+  web:
+    image: node:20
+    command: npm start
+    port: 3000
+    routes:
+      - path: /
+    health:
+      path: /health
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  api:
+    image: python:3.12-slim
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    port: 8000
+    routes:
+      - path: /api
+    env:
+      DATABASE_URL: postgres://db:5432/app
+    mounts:
+      - volume: app-data
+        path: /data
+
+  worker:
+    image: python:3.12-slim
+    command: celery -A tasks worker --loglevel=info
+    env:
+      REDIS_URL: redis://cache:6379
+
+  db:
+    image: postgres:16
+    port: 5432
+    env:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: secret
+    mounts:
+      - volume: db-data
+        path: /var/lib/postgresql/data
+
+  cache:
+    image: redis:7
+    port: 6379
+```
+
+## Top-level fields
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | yes | Service name (used for domains: `<name>.loka`) |
+| `image` | string | no | Default Docker image (single-component shorthand) |
+| `command` | string | no | Default start command |
+| `port` | integer | no | Default exposed port |
+| `components` | map | no | Named components (for multi-component apps) |
+
+## Component fields
+
+Each entry under `components` supports:
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `image` | string | required | Docker image |
+| `command` | string | image default | Start command |
+| `port` | integer | - | Exposed port |
+| `routes` | list | - | HTTP route rules for the domain proxy |
+| `health` | object | - | Health check configuration |
+| `env` | map | - | Environment variables |
+| `mounts` | list | - | Volume mounts |
+| `autoscale` | object | - | Auto-scaling configuration |
+
+## Routes
+
+Routes define how the domain proxy routes HTTP traffic to components:
+
+```yaml
+routes:
+  - path: /                    # Match all paths
+  - path: /api                 # Match paths starting with /api
+  - path: /api
+    strip_prefix: true         # Strip /api before forwarding
+```
+
+When multiple components define routes, the domain proxy uses longest-prefix matching to route requests.
+
+## Health checks
+
+```yaml
+health:
+  path: /health                # HTTP path to check
+  port: 8080                   # Port (defaults to component port)
+  interval: 10s                # Check interval
+  timeout: 5s                  # Timeout per check
+  retries: 3                   # Failures before unhealthy
+  initial_delay: 5s            # Wait before first check
+```
+
+## Volume mounts
+
+```yaml
+mounts:
+  - volume: my-data            # Volume name (created automatically if needed)
+    path: /data                # Mount path inside the VM
+    read_only: false           # Default: false
+```
+
+See [Volumes](/volumes) for more on persistent storage.
+
+## Auto-scaling
+
+```yaml
+autoscale:
+  min: 1                       # Minimum instances
+  max: 5                       # Maximum instances
+  metric: cpu                  # Scale based on: cpu, memory, requests
+  target: 70                   # Target percentage
+```
+
+## Environment variables
+
+```yaml
+env:
+  NODE_ENV: production
+  PORT: "3000"
+  DATABASE_URL: postgres://db:5432/app
+```
+
+Environment variables can also reference secrets:
+
+```yaml
+env:
+  API_KEY: ${SECRET:my-api-key}
+```
+
+## Next steps
+
+- [Deploying Applications](/deploy-apps) -- deploying with `loka.yaml`
+- [Docker Compose](/compose) -- alternative multi-service format
+- [Volumes](/volumes) -- persistent storage
+- [Services](/services) -- managing deployed services

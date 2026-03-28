@@ -16,7 +16,7 @@ const (
 
 // ServiceRoute describes how external traffic reaches a service.
 type ServiceRoute struct {
-	Subdomain    string `json:"subdomain,omitempty"`
+	Domain    string `json:"domain,omitempty"`
 	CustomDomain string `json:"custom_domain,omitempty"`
 	Port         int    `json:"port"`
 	Protocol     string `json:"protocol,omitempty"` // "http" default, "grpc", "tcp"
@@ -68,6 +68,24 @@ type Service struct {
 	LastActivity   time.Time
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	Components     []ServiceComponent `json:"Components,omitempty"` // Multi-component service.
+}
+
+// ServiceComponent represents one component in a multi-component service.
+// Each component runs in its own VM with its own image.
+type ServiceComponent struct {
+	Name        string            `json:"name"`
+	Image       string            `json:"image"`
+	Command     string            `json:"command,omitempty"`
+	Args        []string          `json:"args,omitempty"`
+	Env         map[string]string `json:"env,omitempty"`
+	Port        int               `json:"port"`
+	Domain      string            `json:"domain,omitempty"`     // Empty = internal only.
+	WorkerID    string            `json:"worker_id,omitempty"`
+	ForwardPort int               `json:"forward_port,omitempty"`
+	Status      string            `json:"status"`
+	BundleKey   string            `json:"bundle_key,omitempty"`
+	DependsOn   []string          `json:"depends_on,omitempty"` // Component names this depends on.
 }
 
 // ValidServiceTransitions defines the allowed state transitions for a service.

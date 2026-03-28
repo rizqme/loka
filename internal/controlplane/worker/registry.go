@@ -52,6 +52,49 @@ type ExecCommandData struct {
 	Parallel  bool
 }
 
+// ShellRelay bridges the CP gRPC shell stream and the worker's vsock PTY tunnel.
+// The CP creates this, passes it in a ShellStartData command, and both sides
+// use the channels for bidirectional data relay.
+type ShellRelay struct {
+	Input  chan ShellFrame // CP → worker (stdin data, resize events).
+	Output chan ShellFrame // Worker → CP (stdout data, exit event).
+	ErrCh  chan error      // Worker signals setup success (nil) or failure.
+}
+
+// ShellFrame matches vm.ShellFrame but is duplicated here to avoid importing
+// the worker/vm package in the controlplane package.
+type ShellFrame struct {
+	Type byte
+	Data []byte
+}
+
+// Shell frame type constants (must match vm.FrameData/FrameResize/FrameExit).
+const (
+	FrameData   byte = 0x01
+	FrameResize byte = 0x02
+	FrameExit   byte = 0x03
+)
+
+// NewShellRelay creates a ShellRelay with buffered channels.
+func NewShellRelay() *ShellRelay {
+	return &ShellRelay{
+		Input:  make(chan ShellFrame, 64),
+		Output: make(chan ShellFrame, 64),
+		ErrCh:  make(chan error, 1),
+	}
+}
+
+// ShellStartData is the payload for the "shell_start" worker command.
+type ShellStartData struct {
+	SessionID string
+	Command   string
+	Rows      uint16
+	Cols      uint16
+	Workdir   string
+	Env       map[string]string
+	Relay     *ShellRelay
+}
+
 // Registry manages connected workers.
 type Registry struct {
 	mu      sync.RWMutex

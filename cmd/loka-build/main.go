@@ -1,11 +1,13 @@
 // loka-build builds Linux kernel and initramfs for lokavm.
 //
-// It uses loka's own hypervisor library (pkg/lokavm) to boot
-// an Ubuntu build VM. Source and output are shared via virtiofs — no file copying.
+// Kernel and initramfs are cross-compiled directly on the host using a
+// cross-compile toolchain (e.g. aarch64-linux-gnu-gcc). No Docker or VM needed.
+//
+// E2E tests still use a VM (pkg/lokavm) for running the test suite on Linux.
 //
 // Usage:
 //
-//	loka-build kernel              Build Linux kernel
+//	loka-build kernel              Build Linux kernel (cross-compile)
 //	loka-build initramfs           Build initramfs
 //	loka-build all                 Build both
 package main

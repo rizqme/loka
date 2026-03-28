@@ -10,12 +10,12 @@ const (
 	DomainRouteService DomainRouteType = "service"
 )
 
-// DomainRoute maps a subdomain to a session or service port, enabling public
+// DomainRoute maps a domain to a session or service port, enabling public
 // HTTP access via the control plane's reverse proxy.
-// e.g. "my-app.loka.example.com" → session abc123, port 5000
+// e.g. "my-app.loka" → session abc123, port 5000
 type DomainRoute struct {
 	ID         string          `json:"id,omitempty"`
-	Subdomain  string          `json:"subdomain"`            // e.g. "my-app" → my-app.{base_domain}
+	Domain  string          `json:"domain"`            // Full domain, e.g. "my-app.loka"
 	SessionID  string          `json:"session_id,omitempty"`
 	ServiceID  string          `json:"service_id,omitempty"` // For service routes (cold-start wake).
 	RemotePort int             `json:"remote_port"`          // Port inside the VM

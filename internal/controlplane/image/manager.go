@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -41,12 +42,14 @@ type Manager struct {
 // NewManager creates a new image manager.
 func NewManager(objStore objstore.ObjectStore, dataDir string, logger *slog.Logger) *Manager {
 	os.MkdirAll(filepath.Join(dataDir, "images"), 0o755)
-	return &Manager{
+	m := &Manager{
 		images:   make(map[string]*loka.Image),
 		objStore: objStore,
 		dataDir:  dataDir,
 		logger:   logger,
 	}
+	m.ensureLokaOverlay()
+	return m
 }
 
 // SetHypervisor sets the hypervisor used for creating warm snapshots.
@@ -164,44 +167,14 @@ func (m *Manager) Pull(ctx context.Context, reference string) (*loka.Image, erro
 	// Store layer dir paths in image metadata for VM boot.
 	img.LayerPackKey = strings.Join(layerDirs, ":")
 
-	// Step 3: Create loka overlay layer (topmost) with supervisor + busybox symlinks.
-	// This is a separate layer that gets stacked on top of the image layers.
+	// Step 3: Ensure loka overlay layer exists with supervisor + busybox.
+	m.ensureLokaOverlay()
 	lokaLayerDir := filepath.Join(m.dataDir, "layers", "loka-overlay")
-	if _, err := os.Stat(filepath.Join(lokaLayerDir, "usr/local/bin/loka-supervisor")); os.IsNotExist(err) {
-		os.MkdirAll(lokaLayerDir, 0o755)
-		// Inject supervisor.
-		supervisorDst := filepath.Join(lokaLayerDir, "usr", "local", "bin", "loka-supervisor")
-		os.MkdirAll(filepath.Dir(supervisorDst), 0o755)
-		if supervisorSrc := m.findSupervisor(); supervisorSrc != "" {
-			copyFile(supervisorSrc, supervisorDst)
-			os.Chmod(supervisorDst, 0o755)
-		}
-		// Create busybox symlinks (for Alpine-based images).
-		os.MkdirAll(filepath.Join(lokaLayerDir, "bin"), 0o755)
-		os.MkdirAll(filepath.Join(lokaLayerDir, "sbin"), 0o755)
-		os.MkdirAll(filepath.Join(lokaLayerDir, "usr/bin"), 0o755)
-		for _, cmd := range []string{
-			"sh", "ash", "cat", "ls", "cp", "mv", "rm", "mkdir", "rmdir",
-			"echo", "printf", "test", "true", "false", "sleep", "date",
-			"grep", "sed", "awk", "sort", "uniq", "wc", "head", "tail",
-			"find", "xargs", "tr", "cut", "tee", "touch", "chmod", "chown",
-			"ln", "readlink", "basename", "dirname", "realpath",
-			"ps", "kill", "id", "whoami", "hostname", "uname", "env",
-			"mount", "umount", "mknod", "df", "du",
-			"tar", "gzip", "gunzip", "wget", "ping", "ip", "ifconfig", "route",
-		} {
-			os.Symlink("busybox", filepath.Join(lokaLayerDir, "bin", cmd))
-		}
-		for _, cmd := range []string{"init", "reboot", "halt", "ifconfig", "route", "ip"} {
-			os.Symlink("../bin/busybox", filepath.Join(lokaLayerDir, "sbin", cmd))
-		}
-		for _, cmd := range []string{"env", "test"} {
-			os.Symlink("../../bin/busybox", filepath.Join(lokaLayerDir, "usr/bin", cmd))
-		}
-		m.logger.Info("loka overlay layer created")
-	}
-	// Append loka layer on top.
-	layerDirs = append(layerDirs, lokaLayerDir)
+	// Prepend loka layer at the bottom so image layers take precedence.
+	// The overlay stacks: loka-overlay (bottom) → image layers → upper (top).
+	// This ensures image binaries like /bin/sh override loka-overlay's busybox symlinks,
+	// while loka-supervisor is still available at /usr/local/bin/ (not overridden by images).
+	layerDirs = append([]string{lokaLayerDir}, layerDirs...)
 
 	// Calculate total size across all layers.
 	var totalSize int64
@@ -305,18 +278,108 @@ func extractTarToDir(r io.Reader, dir string) error {
 	return nil
 }
 
-// findSupervisor locates the loka-supervisor binary to inject into images.
+// ensureLokaOverlay creates or updates the loka-overlay layer with the Linux supervisor binary.
+// Called at startup and during image pull.
+func (m *Manager) ensureLokaOverlay() {
+	lokaLayerDir := filepath.Join(m.dataDir, "layers", "loka-overlay")
+	supervisorDst := filepath.Join(lokaLayerDir, "usr", "local", "bin", "loka-supervisor")
+
+	// Check if the supervisor exists and is a valid Linux ELF binary.
+	needsCreate := false
+	if _, err := os.Stat(supervisorDst); os.IsNotExist(err) {
+		needsCreate = true
+	} else {
+		// Verify it's ELF, not Mach-O.
+		f, err := os.Open(supervisorDst)
+		if err == nil {
+			var magic [4]byte
+			f.Read(magic[:])
+			f.Close()
+			if !(magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F') {
+				needsCreate = true // Wrong binary type.
+			}
+		}
+	}
+
+	if !needsCreate {
+		return
+	}
+
+	os.MkdirAll(lokaLayerDir, 0o755)
+	os.MkdirAll(filepath.Dir(supervisorDst), 0o755)
+
+	if supervisorSrc := m.findSupervisor(); supervisorSrc != "" {
+		copyFile(supervisorSrc, supervisorDst)
+		os.Chmod(supervisorDst, 0o755)
+		m.logger.Info("loka overlay: supervisor injected", "src", supervisorSrc)
+	} else {
+		m.logger.Warn("loka overlay: Linux supervisor binary not found")
+	}
+
+	// Create busybox symlinks.
+	os.MkdirAll(filepath.Join(lokaLayerDir, "bin"), 0o755)
+	os.MkdirAll(filepath.Join(lokaLayerDir, "sbin"), 0o755)
+	os.MkdirAll(filepath.Join(lokaLayerDir, "usr/bin"), 0o755)
+	for _, cmd := range []string{
+		"sh", "ash", "cat", "ls", "cp", "mv", "rm", "mkdir", "rmdir",
+		"echo", "printf", "test", "true", "false", "sleep", "date",
+		"grep", "sed", "awk", "sort", "uniq", "wc", "head", "tail",
+		"find", "xargs", "tr", "cut", "tee", "touch", "chmod", "chown",
+		"ln", "readlink", "basename", "dirname", "realpath",
+		"ps", "kill", "id", "whoami", "hostname", "uname", "env",
+		"mount", "umount", "mknod", "df", "du",
+		"tar", "gzip", "gunzip", "wget", "ping", "ip", "ifconfig", "route",
+	} {
+		os.Symlink("busybox", filepath.Join(lokaLayerDir, "bin", cmd))
+	}
+	for _, cmd := range []string{"init", "reboot", "halt", "ifconfig", "route", "ip"} {
+		os.Symlink("../bin/busybox", filepath.Join(lokaLayerDir, "sbin", cmd))
+	}
+	for _, cmd := range []string{"env", "test"} {
+		os.Symlink("../../bin/busybox", filepath.Join(lokaLayerDir, "usr/bin", cmd))
+	}
+	m.logger.Info("loka overlay layer created")
+}
+
+// findSupervisor locates the Linux arm64 loka-supervisor binary to inject into images.
+// The supervisor runs inside Linux VMs, so we must find the Linux build, not the host (macOS) binary.
 func (m *Manager) findSupervisor() string {
+	arch := runtime.GOARCH // arm64 or amd64
+
 	candidates := []string{
-		filepath.Join(m.dataDir, "bin", "loka-supervisor"),
-		"/usr/local/bin/loka-supervisor",
+		// Cross-compiled Linux binary (preferred).
+		filepath.Join(m.dataDir, "bin", "linux-"+arch, "loka-supervisor"),
 	}
+
+	// Check next to the lokad binary for a linux-{arch} sibling.
 	if self, err := os.Executable(); err == nil {
-		candidates = append([]string{filepath.Join(filepath.Dir(self), "loka-supervisor")}, candidates...)
+		dir := filepath.Dir(self)
+		candidates = append(candidates,
+			filepath.Join(dir, "..", "linux-"+arch, "loka-supervisor"), // bin/../linux-arm64/
+			filepath.Join(dir, "linux-"+arch, "loka-supervisor"),      // bin/linux-arm64/
+		)
 	}
+
+	// Also check common project build output paths.
+	candidates = append(candidates,
+		"bin/linux-"+arch+"/loka-supervisor",
+		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "linux-"+arch, "loka-supervisor"),
+	)
+
 	for _, p := range candidates {
 		if _, err := os.Stat(p); err == nil {
-			return p
+			// Verify it's actually a Linux ELF binary, not a macOS Mach-O.
+			f, err := os.Open(p)
+			if err != nil {
+				continue
+			}
+			var magic [4]byte
+			f.Read(magic[:])
+			f.Close()
+			if magic[0] == 0x7f && magic[1] == 'E' && magic[2] == 'L' && magic[3] == 'F' {
+				return p
+			}
+			// Skip non-ELF binaries (macOS Mach-O, etc.)
 		}
 	}
 	return ""

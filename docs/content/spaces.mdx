@@ -1,0 +1,94 @@
+---
+title: Spaces
+description: Managing LOKA deployments
+---
+
+# Spaces
+
+A space is a LOKA deployment -- a control plane and its workers. You can have multiple spaces (local, staging, production) and switch between them.
+
+## List spaces
+
+```bash
+loka space list
+```
+
+Output shows all configured spaces with the active one marked:
+
+```
+NAME     PROVIDER  STATUS    ENDPOINT
+* dev    local     running   http://localhost:6840
+  prod   aws       running   http://10.0.0.1:6840
+  staging gcp      stopped   http://10.0.1.1:6840
+```
+
+## Select a space
+
+Switch the active space. All subsequent commands target this space:
+
+```bash
+loka space select prod
+```
+
+## Show current space
+
+```bash
+loka space current
+```
+
+## Space status
+
+```bash
+loka space status                          # Status of active space
+loka space status prod                     # Status of specific space
+```
+
+Shows control plane health, worker count, running sessions, deployed services, and resource usage.
+
+## Stop a space
+
+```bash
+loka space down                            # Stop the active space
+loka space down dev                        # Stop a specific space
+```
+
+This stops the control plane and all workers. Sessions and services are preserved and will resume when the space is started again.
+
+## Create spaces
+
+Spaces are created via `loka setup` or `loka connect`:
+
+```bash
+# Local space
+loka setup local --name dev
+
+# Cloud spaces
+loka setup aws --name prod --region us-east-1 --workers 3
+loka setup gcp --name staging --project my-proj --workers 2
+loka setup azure --name eu --region westeurope --workers 2
+loka setup do --name nyc --region nyc1 --workers 2
+loka setup ovh --name fra --region gra --workers 2
+
+# Self-managed VMs
+loka setup vm --name prod --cp 10.0.0.1 --worker 10.0.0.2
+
+# Declarative
+loka setup apply cluster.yml
+
+# Connect to an existing control plane
+loka connect http://10.0.0.1:6840 --name custom
+```
+
+## Storage
+
+Space configurations are stored in `~/.loka/deployments.json`. The `--space` global flag lets you target a specific space without switching:
+
+```bash
+loka service list --space prod
+loka session list --space dev
+```
+
+## Next steps
+
+- [Deploy Locally](/deploy-local) -- set up a local space
+- [CLI Reference](/cli) -- full command reference

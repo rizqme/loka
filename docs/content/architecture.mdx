@@ -5,92 +5,135 @@ description: System design
 
 # Architecture
 
-Loka runs AI agent workloads in Firecracker microVMs with sub-30ms startup times. This page describes the system components and how they interact.
+LOKA runs AI agent workloads and deploys applications in microVMs. On macOS, VMs use the Apple Virtualization Framework. On Linux, they use Cloud Hypervisor with KVM. This page describes the system components and how they interact.
 
 ## System diagram
 
 ```
-┌─────────────────────────────────────────────┐
-│                  SDK / API                   │
-│            (Python, TypeScript)              │
-└──────────────────┬──────────────────────────┘
-                   │ gRPC / HTTP
-┌──────────────────▼──────────────────────────┐
-│             Control Plane (CP)               │
-│  ┌──────────┐ ┌──────────┐ ┌─────────────┐  │
-│  │ Session  │ │Checkpoint│ │   Image     │  │
-│  │ Manager  │ │ Manager  │ │  Registry   │  │
-│  └──────────┘ └──────────┘ └─────────────┘  │
-│  ┌──────────┐ ┌──────────┐ ┌─────────────┐  │
-│  │ Scheduler│ │  Policy  │ │  Approval   │  │
-│  │          │ │  Engine  │ │   Queue     │  │
-│  └──────────┘ └──────────┘ └─────────────┘  │
-└──────────────────┬──────────────────────────┘
-                   │ gRPC
-┌──────────────────▼──────────────────────────┐
-│               Worker Node                    │
-│  ┌──────────────────────────────────────┐    │
-│  │            Supervisor                │    │
-│  │  ┌────────┐ ┌────────┐ ┌────────┐   │    │
-│  │  │ VM 1   │ │ VM 2   │ │ VM N   │   │    │
-│  │  │(FC)    │ │(FC)    │ │(FC)    │   │    │
-│  │  └────────┘ └────────┘ └────────┘   │    │
-│  └──────────────────────────────────────┘    │
-│  ┌──────────────────────────────────────┐    │
-│  │         Snapshot Store               │    │
-│  └──────────────────────────────────────┘    │
-└─────────────────────────────────────────────┘
++-------------------------------------------------+
+|                   SDK / API                     |
+|             (Python, TypeScript)                |
++------------------------+------------------------+
+                         | gRPC / HTTP
++------------------------v------------------------+
+|              Control Plane (CP)                 |
+|  +----------+ +----------+ +-------------+     |
+|  | Session  | |Checkpoint| |   Image     |     |
+|  | Manager  | | Manager  | |  Registry   |     |
+|  +----------+ +----------+ +-------------+     |
+|  +----------+ +----------+ +-------------+     |
+|  | Service  | |  Domain  | |   Volume    |     |
+|  | Manager  | |  Proxy   | |   Manager   |     |
+|  +----------+ +----------+ +-------------+     |
+|  +----------+ +----------+ +-------------+     |
+|  | Scheduler| |  Policy  | |    Lock     |     |
+|  |          | |  Engine  | |  Manager    |     |
+|  +----------+ +----------+ +-------------+     |
+|  +----------+ +----------+                      |
+|  | Approval | |   DNS    |                      |
+|  |  Queue   | |  Server  |                      |
+|  +----------+ +----------+                      |
++------------------------+------------------------+
+                         | gRPC
++------------------------v------------------------+
+|                Worker Node                      |
+|  +------------------------------------------+  |
+|  |             VM Manager                   |  |
+|  |  +--------+ +--------+ +--------+       |  |
+|  |  | VM 1   | | VM 2   | | VM N   |       |  |
+|  |  | (VZ/CH)| | (VZ/CH)| | (VZ/CH)|       |  |
+|  |  +--------+ +--------+ +--------+       |  |
+|  +------------------------------------------+  |
+|  +------------------------------------------+  |
+|  |       Supervisor (inside each VM)        |  |
+|  |  Command proxy | Network filter          |  |
+|  |  Filesystem guard | Seccomp              |  |
+|  +------------------------------------------+  |
+|  +------------------------------------------+  |
+|  |      Snapshot Store  |  Volume Sync      |  |
+|  +------------------------------------------+  |
++-------------------------------------------------+
 ```
+
+VZ = Apple Virtualization Framework (macOS), CH = Cloud Hypervisor (Linux)
 
 ## Components
 
 ### Control Plane (CP)
 
-The central API server. Handles session lifecycle, scheduling, policy evaluation, and checkpoint management. Stateless -- all persistent state lives in the database and snapshot store.
+The central API server. Handles session lifecycle, service deployment, scheduling, policy evaluation, checkpoint management, domain routing, and volume management. Stateless -- all persistent state lives in the database and object store.
+
+### Service Manager
+
+Manages deployed applications. Handles multi-component services defined in `loka.yaml` or Docker Compose files, tracks service health, and manages redeployments.
+
+### Domain Proxy
+
+Routes incoming HTTP/HTTPS traffic to the correct service or session based on domain name. Provides automatic `.loka` domains for all services and supports custom domain mappings.
+
+### DNS Server
+
+Built-in DNS server that resolves `.loka` domains to the control plane. Enabled via `loka dns enable`, which configures the system resolver to forward `.loka` queries to LOKA.
+
+### Volume Manager
+
+Manages persistent volumes that can be attached to sessions and services. Supports cross-worker volume sync so data follows workloads across the cluster.
+
+### Lock Manager
+
+Coordinates distributed locking for operations that require mutual exclusion, such as volume writes and snapshot creation.
 
 ### Scheduler
 
-Assigns sessions to worker nodes based on available capacity. Supports affinity hints (e.g., place a session on the same worker as its parent checkpoint).
+Assigns sessions and services to worker nodes based on available capacity. Supports affinity hints (e.g., place a session on the same worker as its parent checkpoint).
 
 ### Worker
 
-A host machine that runs Firecracker microVMs. Each worker runs a **supervisor** process that manages the VMs on that host.
+A host machine that runs microVMs. On macOS, the worker uses the Apple Virtualization Framework. On Linux, it uses Cloud Hypervisor with KVM. Each worker runs a VM manager that handles the lifecycle of VMs on that host.
 
 ### Supervisor
 
-Per-worker daemon that starts, stops, snapshots, and restores Firecracker VMs. It enforces command policies, manages the approval queue, and handles checkpoint I/O.
+Runs inside each microVM as PID 1. It starts and stops processes, enforces command policies, manages the approval queue, handles checkpoint I/O, and provides the PTY for shell access.
 
-### Firecracker VM
+### MicroVM
 
-Each session runs in a dedicated Firecracker microVM with its own kernel, filesystem, and network namespace. VMs boot from warm snapshots in ~28ms.
+Each session or service instance runs in a dedicated microVM with its own kernel, filesystem, and network namespace. On macOS, VMs are managed by the Apple Virtualization Framework. On Linux, VMs are managed by Cloud Hypervisor.
 
 ### Snapshot Store
 
-Stores base images (rootfs.ext4), warm snapshots (memory + disk), and checkpoint overlays. Can be backed by local disk or shared storage (NFS, S3).
+Stores base images, warm snapshots (memory + disk), and checkpoint overlays. Can be backed by local disk or shared storage (NFS, S3).
+
+### Volume Sync
+
+Synchronizes volume data between workers, ensuring persistent data is available wherever a workload is scheduled.
 
 ## Data flow
 
-1. **SDK** calls `create_session` on the **CP**.
+1. **SDK/CLI** calls `create_session` or `deploy` on the **CP**.
 2. **CP** asks the **Scheduler** for a worker with capacity.
-3. **Scheduler** returns a worker. **CP** sends a `StartVM` request to that worker's **Supervisor**.
-4. **Supervisor** restores a Firecracker VM from the warm snapshot. Session is `running` in ~28ms.
-5. **SDK** calls `run` on the **CP**. **CP** forwards to the **Supervisor**.
+3. **Scheduler** returns a worker. **CP** sends a `StartVM` request to that worker.
+4. Worker starts a microVM (VZ on macOS, Cloud Hypervisor on Linux). Session is `running`.
+5. **SDK/CLI** calls `run` on the **CP**. **CP** forwards to the **Supervisor** inside the VM.
 6. **Supervisor** checks the command against the **policy engine**. If approved, it executes inside the VM.
-7. Result flows back: **VM** -> **Supervisor** -> **CP** -> **SDK**.
+7. Result flows back: **VM** --> **Supervisor** --> **CP** --> **SDK/CLI**.
+8. For services, the **Domain Proxy** routes incoming HTTP traffic to the correct VM based on the `.loka` domain.
 
 ## Key files
 
 | Path | Description |
 |---|---|
-| `cmd/cp/` | Control plane entry point |
-| `cmd/worker/` | Worker + supervisor entry point |
-| `internal/cp/` | CP business logic (sessions, checkpoints, scheduling) |
-| `internal/supervisor/` | VM lifecycle, command execution, policy enforcement |
-| `internal/snapshot/` | Snapshot store (create, restore, diff) |
-| `internal/policy/` | Command, network, and filesystem policy evaluation |
+| `cmd/lokad/` | Control plane entry point |
+| `cmd/loka/` | CLI client |
+| `internal/controlplane/` | CP business logic (sessions, services, scheduling) |
+| `internal/controlplane/api/` | HTTP/gRPC API server, domain proxy, volume endpoints |
+| `internal/controlplane/service/` | Service manager |
+| `internal/controlplane/volume/` | Volume manager |
+| `internal/controlplane/lock/` | Distributed lock manager |
+| `internal/supervisor/` | VM-side command execution, policy enforcement |
+| `internal/worker/` | Worker agent, VM lifecycle |
+| `internal/worker/volsync/` | Volume sync between workers |
 | `proto/` | gRPC service definitions |
 | `sdk/python/` | Python SDK source |
 | `sdk/typescript/` | TypeScript SDK source |
 
 ## Next steps
-

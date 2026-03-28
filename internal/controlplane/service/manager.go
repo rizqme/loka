@@ -50,7 +50,7 @@ type DeployOpts struct {
 // the api package directly.
 type DomainRouteRegistrar interface {
 	AddRoute(route *loka.DomainRoute)
-	RemoveRoute(subdomain string) bool
+	RemoveRoute(domain string) bool
 	ListRoutes() []*loka.DomainRoute
 }
 
@@ -293,7 +293,7 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 		} else {
 			bundleVol := loka.Volume{
 				Path:     "/workspace",
-				Provider: "volume",
+				Provider: "bundle",
 				Name:     bundleVolName,
 				Access:   "readonly",
 			}
@@ -406,11 +406,11 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 				// Register domain routes with the proxy.
 				if m.proxy != nil && len(s.Routes) > 0 {
 					for _, route := range s.Routes {
-						if route.Subdomain == "" {
+						if route.Domain == "" {
 							continue
 						}
 						m.proxy.AddRoute(&loka.DomainRoute{
-							Subdomain:  route.Subdomain,
+							Domain:     route.Domain,
 							ServiceID:  s.ID,
 							RemotePort: route.Port,
 							Type:       loka.DomainRouteService,
@@ -453,8 +453,8 @@ func (m *Manager) Destroy(ctx context.Context, id string) error {
 	// Remove domain routes from the proxy.
 	if m.proxy != nil {
 		for _, route := range svc.Routes {
-			if route.Subdomain != "" {
-				m.proxy.RemoveRoute(route.Subdomain)
+			if route.Domain != "" {
+				m.proxy.RemoveRoute(route.Domain)
 			}
 		}
 	}
@@ -488,8 +488,8 @@ func (m *Manager) Stop(ctx context.Context, id string) (*loka.Service, error) {
 	// Remove domain routes from the proxy.
 	if m.proxy != nil {
 		for _, route := range svc.Routes {
-			if route.Subdomain != "" {
-				m.proxy.RemoveRoute(route.Subdomain)
+			if route.Domain != "" {
+				m.proxy.RemoveRoute(route.Domain)
 			}
 		}
 	}
@@ -778,11 +778,11 @@ func (m *Manager) registerExistingRoutes() {
 	}
 	for _, svc := range services {
 		for _, route := range svc.Routes {
-			if route.Subdomain == "" {
+			if route.Domain == "" {
 				continue
 			}
 			m.proxy.AddRoute(&loka.DomainRoute{
-				Subdomain:  route.Subdomain,
+				Domain:     route.Domain,
 				ServiceID:  svc.ID,
 				RemotePort: route.Port,
 				Type:       loka.DomainRouteService,

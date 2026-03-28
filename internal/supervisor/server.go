@@ -7,6 +7,8 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"syscall"
@@ -121,10 +123,15 @@ func (s *Server) handleConnection(conn net.Conn) {
 
 	encoder := json.NewEncoder(conn)
 
-	// tcp_forward is special: after the RPC response the connection becomes
-	// a raw TCP tunnel, so we handle it here instead of in handleRPC.
+	// tcp_forward and shell_start are special: after the RPC response the
+	// connection becomes a raw tunnel, so we handle them here instead of
+	// in handleRPC.
 	if req.Method == "tcp_forward" {
 		s.handleTCPForward(conn, encoder, req)
+		return
+	}
+	if req.Method == "shell_start" {
+		s.handleShellStart(conn, encoder, req)
 		return
 	}
 
@@ -238,6 +245,15 @@ func (s *Server) handleRPC(req vm.RPCRequest) vm.RPCResponse {
 
 	case "service_logs":
 		return s.handleServiceLogs(req)
+
+	case "write_hosts":
+		return s.handleWriteHosts(req)
+
+	case "file_lock":
+		return s.handleFileLock(req)
+
+	case "file_unlock":
+		return s.handleFileUnlock(req)
 
 	default:
 		return vm.RPCResponse{
@@ -484,6 +500,272 @@ func extractPath(url string) string {
 		return s[idx:]
 	}
 	return "/"
+}
+
+// ── Interactive Shell ────────────────────────────────────
+
+// handleShellStart allocates a PTY, starts a shell process, and relays I/O
+// over the vsock connection using the shell framing protocol. After the RPC
+// response, the connection becomes a framed PTY tunnel.
+func (s *Server) handleShellStart(conn net.Conn, encoder *json.Encoder, req vm.RPCRequest) {
+	var params struct {
+		Command string            `json:"command"`
+		Rows    uint16            `json:"rows"`
+		Cols    uint16            `json:"cols"`
+		Workdir string            `json:"workdir"`
+		Env     map[string]string `json:"env"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("invalid params: %w", err)))
+		return
+	}
+	if params.Command == "" {
+		params.Command = "/bin/sh"
+	}
+	// Fall back to /bin/sh if the requested shell doesn't exist.
+	if _, err := os.Stat(params.Command); err != nil {
+		params.Command = "/bin/sh"
+	}
+	if params.Rows == 0 {
+		params.Rows = 24
+	}
+	if params.Cols == 0 {
+		params.Cols = 80
+	}
+
+	// Allocate PTY.
+	master, slavePath, err := openPTY()
+	if err != nil {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("open pty: %w", err)))
+		return
+	}
+	defer master.Close()
+
+	// Set initial size.
+	setPTYSize(master, params.Rows, params.Cols)
+
+	// Open slave for the child process.
+	slave, err := os.OpenFile(slavePath, os.O_RDWR, 0)
+	if err != nil {
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("open slave %s: %w", slavePath, err)))
+		return
+	}
+
+	// Start the shell process with the PTY slave as stdio.
+	cmd := exec.Command(params.Command)
+	cmd.Stdin = slave
+	cmd.Stdout = slave
+	cmd.Stderr = slave
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Setsid:  true,
+		Setctty: true,
+	}
+	if params.Workdir != "" {
+		cmd.Dir = params.Workdir
+	}
+
+	// Build environment.
+	cmd.Env = os.Environ()
+	cmd.Env = append(cmd.Env, "TERM=xterm-256color")
+	for k, v := range params.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+
+	if err := cmd.Start(); err != nil {
+		slave.Close()
+		encoder.Encode(rpcError(req.ID, fmt.Errorf("start shell: %w", err)))
+		return
+	}
+	slave.Close() // Parent doesn't need the slave.
+
+	pid := cmd.Process.Pid
+	s.logger.Info("shell started", "pid", pid, "command", params.Command)
+
+	// Send success response. After this, the connection uses the framing protocol.
+	result, _ := json.Marshal(map[string]int{"pid": pid})
+	encoder.Encode(vm.RPCResponse{ID: req.ID, Result: result})
+
+	// Clear deadlines — the shell can live indefinitely.
+	conn.SetDeadline(time.Time{})
+
+	// Relay PTY I/O with framing protocol.
+	var wg sync.WaitGroup
+	done := make(chan struct{})
+
+	// Goroutine 1: PTY master → framed data → conn.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		buf := make([]byte, 4096)
+		for {
+			n, err := master.Read(buf)
+			if n > 0 {
+				if werr := vm.WriteFrame(conn, vm.ShellFrame{Type: vm.FrameData, Data: buf[:n]}); werr != nil {
+					return
+				}
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	// Goroutine 2: conn → unframe → PTY master (data) or resize.
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer close(done)
+		for {
+			frame, err := vm.ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			switch frame.Type {
+			case vm.FrameData:
+				master.Write(frame.Data)
+			case vm.FrameResize:
+				rows, cols, err := vm.ParseResize(frame.Data)
+				if err == nil {
+					setPTYSize(master, rows, cols)
+				}
+			}
+		}
+	}()
+
+	// Wait for shell process to exit.
+	exitCode := 0
+	if err := cmd.Wait(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	s.logger.Info("shell exited", "pid", pid, "exit_code", exitCode)
+
+	// Send exit frame.
+	vm.WriteFrame(conn, vm.ShellFrame{Type: vm.FrameExit, Data: vm.ExitPayload(exitCode)})
+
+	// Close master to unblock the read goroutine.
+	master.Close()
+
+	// Wait for relay goroutines.
+	wg.Wait()
+}
+
+// ── Hosts Injection ─────────────────────────────────────
+
+func (s *Server) handleWriteHosts(req vm.RPCRequest) vm.RPCResponse {
+	var params struct {
+		Entries map[string]string `json:"entries"` // hostname → IP
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, fmt.Errorf("invalid params: %w", err))
+	}
+
+	// Append entries to /etc/hosts.
+	var lines []string
+	lines = append(lines, "\n# LOKA service components")
+	for host, ip := range params.Entries {
+		lines = append(lines, fmt.Sprintf("%s\t%s", ip, host))
+	}
+
+	f, err := os.OpenFile("/etc/hosts", os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return rpcError(req.ID, fmt.Errorf("open /etc/hosts: %w", err))
+	}
+	defer f.Close()
+
+	for _, line := range lines {
+		fmt.Fprintln(f, line)
+	}
+
+	s.logger.Info("hosts entries written", "count", len(params.Entries))
+	result, _ := json.Marshal(map[string]int{"entries": len(params.Entries)})
+	return vm.RPCResponse{ID: req.ID, Result: result}
+}
+
+// ── File Lock RPC Handlers ───────────────────────────────
+
+func (s *Server) handleFileLock(req vm.RPCRequest) vm.RPCResponse {
+	var params struct {
+		Path      string `json:"path"`
+		Exclusive bool   `json:"exclusive"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, fmt.Errorf("invalid params: %w", err))
+	}
+	if params.Path == "" {
+		return rpcError(req.ID, fmt.Errorf("path is required"))
+	}
+
+	// Use flock on the actual file (works via virtiofs for same-worker VMs).
+	lockPath := params.Path + ".lock"
+	f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		return rpcError(req.ID, fmt.Errorf("open lock file: %w", err))
+	}
+
+	how := syscall.LOCK_SH | syscall.LOCK_NB
+	if params.Exclusive {
+		how = syscall.LOCK_EX | syscall.LOCK_NB
+	}
+	if err := syscall.Flock(int(f.Fd()), how); err != nil {
+		f.Close()
+		return rpcError(req.ID, fmt.Errorf("file is locked by another process"))
+	}
+
+	// Store the file handle so we can unlock later.
+	s.storeLockFile(params.Path, f)
+
+	result, _ := json.Marshal(map[string]string{"status": "locked", "path": params.Path})
+	return vm.RPCResponse{ID: req.ID, Result: result}
+}
+
+func (s *Server) handleFileUnlock(req vm.RPCRequest) vm.RPCResponse {
+	var params struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal(req.Params, &params); err != nil {
+		return rpcError(req.ID, fmt.Errorf("invalid params: %w", err))
+	}
+
+	f := s.removeLockFile(params.Path)
+	if f != nil {
+		syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+		f.Close()
+	}
+
+	result, _ := json.Marshal(map[string]string{"status": "unlocked", "path": params.Path})
+	return vm.RPCResponse{ID: req.ID, Result: result}
+}
+
+// Lock file tracking for cleanup.
+var (
+	lockFilesMu sync.Mutex
+	lockFiles   = make(map[string]*os.File)
+)
+
+func (s *Server) storeLockFile(path string, f *os.File) {
+	lockFilesMu.Lock()
+	defer lockFilesMu.Unlock()
+	// Close any existing lock on this path.
+	if old, ok := lockFiles[path]; ok {
+		syscall.Flock(int(old.Fd()), syscall.LOCK_UN)
+		old.Close()
+	}
+	lockFiles[path] = f
+}
+
+func (s *Server) removeLockFile(path string) *os.File {
+	lockFilesMu.Lock()
+	defer lockFilesMu.Unlock()
+	f, ok := lockFiles[path]
+	if ok {
+		delete(lockFiles, path)
+	}
+	return f
 }
 
 // ── Service RPC Handlers ────────────────────────────────

@@ -16,7 +16,7 @@ import (
 func newTestProxy(t *testing.T) *DomainProxy {
 	t.Helper()
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	return NewDomainProxy("loka.example.com", nil, nil, logger, DomainProxyOpts{})
+	return NewDomainProxy(nil, nil, logger, DomainProxyOpts{})
 }
 
 func TestAddRoute(t *testing.T) {
@@ -24,7 +24,7 @@ func TestAddRoute(t *testing.T) {
 
 	route := &loka.DomainRoute{
 		ID:         "my-app",
-		Subdomain:  "my-app",
+		Domain:  "my-app",
 		SessionID:  "sess-123",
 		RemotePort: 5000,
 	}
@@ -47,7 +47,7 @@ func TestRemoveRoute(t *testing.T) {
 
 	p.AddRoute(&loka.DomainRoute{
 		ID:        "remove-me",
-		Subdomain: "remove-me",
+		Domain: "remove-me",
 		SessionID: "sess-456",
 	})
 
@@ -72,8 +72,8 @@ func TestListRoutes(t *testing.T) {
 	}
 
 	// Add two routes.
-	p.AddRoute(&loka.DomainRoute{Subdomain: "app-a", SessionID: "s1", RemotePort: 3000})
-	p.AddRoute(&loka.DomainRoute{Subdomain: "app-b", SessionID: "s2", RemotePort: 4000})
+	p.AddRoute(&loka.DomainRoute{Domain: "app-a", SessionID: "s1", RemotePort: 3000})
+	p.AddRoute(&loka.DomainRoute{Domain: "app-b", SessionID: "s2", RemotePort: 4000})
 
 	routes = p.ListRoutes()
 	if len(routes) != 2 {
@@ -90,11 +90,11 @@ func TestRemoveNonexistent(t *testing.T) {
 	}
 }
 
-func TestDuplicateSubdomain(t *testing.T) {
+func TestDuplicateDomain(t *testing.T) {
 	p := newTestProxy(t)
 
-	p.AddRoute(&loka.DomainRoute{Subdomain: "dup", SessionID: "first", RemotePort: 3000})
-	p.AddRoute(&loka.DomainRoute{Subdomain: "dup", SessionID: "second", RemotePort: 4000})
+	p.AddRoute(&loka.DomainRoute{Domain: "dup", SessionID: "first", RemotePort: 3000})
+	p.AddRoute(&loka.DomainRoute{Domain: "dup", SessionID: "second", RemotePort: 4000})
 
 	got := p.GetRoute("dup")
 	if got == nil {
@@ -126,7 +126,7 @@ func TestHandlerNoRoute(t *testing.T) {
 	p := newTestProxy(t)
 	handler := p.Handler()
 
-	// Valid subdomain format but no route registered.
+	// Valid domain format but no route registered.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "no-such-app.loka.example.com"
 	rec := httptest.NewRecorder()
@@ -141,9 +141,9 @@ func TestAddRoute_MultipleRoutes(t *testing.T) {
 	p := newTestProxy(t)
 
 	// Add routes for different sessions/ports.
-	p.AddRoute(&loka.DomainRoute{Subdomain: "api", SessionID: "s1", RemotePort: 8080})
-	p.AddRoute(&loka.DomainRoute{Subdomain: "web", SessionID: "s2", RemotePort: 3000})
-	p.AddRoute(&loka.DomainRoute{Subdomain: "db-admin", SessionID: "s3", RemotePort: 5432})
+	p.AddRoute(&loka.DomainRoute{Domain: "api", SessionID: "s1", RemotePort: 8080})
+	p.AddRoute(&loka.DomainRoute{Domain: "web", SessionID: "s2", RemotePort: 3000})
+	p.AddRoute(&loka.DomainRoute{Domain: "db-admin", SessionID: "s3", RemotePort: 5432})
 
 	routes := p.ListRoutes()
 	if len(routes) != 3 {
@@ -168,7 +168,7 @@ func TestAddRoute_MultipleRoutes(t *testing.T) {
 func TestRemoveRoute_ThenGetReturnsNil(t *testing.T) {
 	p := newTestProxy(t)
 
-	p.AddRoute(&loka.DomainRoute{Subdomain: "temp", SessionID: "s1", RemotePort: 9000})
+	p.AddRoute(&loka.DomainRoute{Domain: "temp", SessionID: "s1", RemotePort: 9000})
 
 	// Verify it exists.
 	if got := p.GetRoute("temp"); got == nil {
@@ -193,8 +193,8 @@ func TestRemoveRoute_ThenGetReturnsNil(t *testing.T) {
 func TestAddRoute_OverwriteUpdatesPort(t *testing.T) {
 	p := newTestProxy(t)
 
-	p.AddRoute(&loka.DomainRoute{Subdomain: "svc", SessionID: "s1", RemotePort: 3000})
-	p.AddRoute(&loka.DomainRoute{Subdomain: "svc", SessionID: "s1", RemotePort: 4000})
+	p.AddRoute(&loka.DomainRoute{Domain: "svc", SessionID: "s1", RemotePort: 3000})
+	p.AddRoute(&loka.DomainRoute{Domain: "svc", SessionID: "s1", RemotePort: 4000})
 
 	got := p.GetRoute("svc")
 	if got == nil {
@@ -236,11 +236,11 @@ func TestDomainProxy_SharedHTTPClient(t *testing.T) {
 	}
 }
 
-func TestHandlerBaseHost_NoSubdomain(t *testing.T) {
+func TestHandlerBaseHost_NoDomain(t *testing.T) {
 	p := newTestProxy(t)
 	handler := p.Handler()
 
-	// Request to the base domain itself (no subdomain).
+	// Request to an unregistered host.
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Host = "loka.example.com"
 	rec := httptest.NewRecorder()

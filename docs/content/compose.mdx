@@ -1,0 +1,108 @@
+---
+title: Docker Compose
+description: Deploy multi-service apps from docker-compose.yml
+---
+
+# Docker Compose
+
+LOKA can deploy applications defined in a `docker-compose.yml` file. Each service in the Compose file becomes a component running in its own microVM.
+
+## Deploy a Compose project
+
+```bash
+loka deploy --compose docker-compose.yml
+```
+
+Or, if `docker-compose.yml` exists in the current directory:
+
+```bash
+loka deploy --compose .
+```
+
+## Supported Compose features
+
+LOKA maps Compose concepts to its own primitives:
+
+| Compose | LOKA |
+|---------|------|
+| `services` | Components (each in its own microVM) |
+| `image` | Docker image (pulled via crane, no Docker daemon needed) |
+| `ports` | Port mappings and domain proxy routes |
+| `environment` | Environment variables |
+| `volumes` (named) | LOKA volumes with cross-worker sync |
+| `depends_on` | Start order |
+| `command` | Start command |
+| `healthcheck` | Health check configuration |
+
+## Example
+
+Given this `docker-compose.yml`:
+
+```yaml
+version: "3.8"
+
+services:
+  web:
+    image: node:20
+    ports:
+      - "3000:3000"
+    environment:
+      DATABASE_URL: postgres://db:5432/app
+    depends_on:
+      - db
+      - redis
+
+  db:
+    image: postgres:16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: app
+      POSTGRES_PASSWORD: secret
+    volumes:
+      - db-data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  db-data:
+```
+
+Deploy it:
+
+```bash
+loka deploy --compose docker-compose.yml
+```
+
+This creates a service with three components (`web`, `db`, `redis`), each running in its own microVM. With DNS enabled:
+
+- `http://web.<service-name>.loka` -- the web frontend
+- `http://db.<service-name>.loka` -- PostgreSQL
+- `http://redis.<service-name>.loka` -- Redis
+
+## Service networking
+
+Components within a Compose deployment can reach each other by service name. LOKA provides internal DNS resolution so that `db`, `redis`, etc. resolve to the correct component instances.
+
+## Volumes
+
+Named volumes in the Compose file are mapped to LOKA volumes, which provide persistent storage with cross-worker sync. See [Volumes](/volumes) for details.
+
+## Limitations
+
+Some Compose features are not currently supported:
+
+- `build` (use pre-built images instead)
+- `networks` (LOKA manages networking internally)
+- `configs` and `secrets` Compose resources (use `loka secret` instead)
+- `deploy.replicas` (use `loka.yaml` autoscale instead)
+
+## Next steps
+
+- [Deploying Applications](/deploy-apps) -- other deployment methods
+- [loka.yaml Reference](/loka-yaml) -- native multi-component format
+- [Volumes](/volumes) -- persistent storage
+- [Domains & DNS](/domains) -- routing traffic to services

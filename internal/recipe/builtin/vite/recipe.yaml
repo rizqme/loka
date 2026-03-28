@@ -1,19 +1,17 @@
 name: vite
 version: "1.0"
-description: Vite application
+description: Vite/VitePress static site
 before: [nodejs]
-image: "{{image}}"
-port: 4173
+image: nginx:alpine
+port: 80
 build:
   - "{{pm_install}}"
   - "{{pm_run}} build"
 include:
-  - package.json
-  - node_modules/
   - dist/
-start: "{{npx}} vite preview --host 0.0.0.0"
+start: "rm -rf /usr/share/nginx/html && ln -s /workspace/dist /usr/share/nginx/html && nginx -g 'daemon off;'"
 health:
   path: /
-  interval: 10
+  interval: 3
   timeout: 5
-  retries: 3
+  retries: 1

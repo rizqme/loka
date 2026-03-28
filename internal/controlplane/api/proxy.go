@@ -18,23 +18,27 @@ import (
 	"github.com/vyprai/loka/internal/loka"
 )
 
-// DomainProxy is a reverse proxy that routes HTTP requests by subdomain
+// DomainProxy is a reverse proxy that routes HTTP requests by domain
 // to specific ports inside session VMs or deployed services.
 //
 // For service routes, the proxy supports cold-start wake-on-request:
 // if a service is idle, the first request triggers a wake and blocks
 // until the service is ready (up to 30s).
 //
-// Example: my-app.loka.example.com -> session abc123, port 5000
+// Example: my-app.loka -> session abc123, port 5000
+// CertRegenerator is called when a new domain route is added so the TLS cert
+// can be regenerated to include the domain as a SAN.
+type CertRegenerator func(domains []string)
+
 type DomainProxy struct {
-	baseDomain string
 	sm         *session.Manager
 	svcMgr     *service.Manager // Service manager for cold-start wake.
 	registry   *worker.Registry
 	logger     *slog.Logger
+	certRegen  CertRegenerator // Called when routes change to update TLS cert.
 
 	mu     sync.RWMutex
-	routes map[string]*loka.DomainRoute // subdomain -> route
+	routes map[string]*loka.DomainRoute // domain -> route
 
 	// wakeMu protects wakeInFlight to coalesce concurrent wake requests.
 	wakeMu       sync.Mutex
@@ -54,13 +58,12 @@ type wakeState struct {
 }
 
 // NewDomainProxy creates a domain-based reverse proxy.
-func NewDomainProxy(baseDomain string, sm *session.Manager, registry *worker.Registry, logger *slog.Logger, opts ...DomainProxyOpts) *DomainProxy {
+func NewDomainProxy(sm *session.Manager, registry *worker.Registry, logger *slog.Logger, opts ...DomainProxyOpts) *DomainProxy {
 	var o DomainProxyOpts
 	if len(opts) > 0 {
 		o = opts[0]
 	}
 	return &DomainProxy{
-		baseDomain:   baseDomain,
 		sm:           sm,
 		svcMgr:       o.ServiceManager,
 		registry:     registry,
@@ -83,11 +86,31 @@ type DomainProxyOpts struct {
 	ServiceManager *service.Manager
 }
 
-// AddRoute registers a subdomain -> session/service:port mapping.
+// SetCertRegenerator sets a callback to regenerate TLS certs when routes change.
+func (p *DomainProxy) SetCertRegenerator(fn CertRegenerator) {
+	p.certRegen = fn
+}
+
+// allDomains returns all registered domain names.
+func (p *DomainProxy) allDomains() []string {
+	var domains []string
+	for d := range p.routes {
+		domains = append(domains, d)
+	}
+	return domains
+}
+
+// AddRoute registers a domain -> session/service:port mapping.
 func (p *DomainProxy) AddRoute(route *loka.DomainRoute) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.routes[route.Subdomain] = route
+	p.routes[route.Domain] = route
+	domains := p.allDomains()
+	p.mu.Unlock()
+
+	// Regenerate TLS cert to include the new domain as a SAN.
+	if p.certRegen != nil {
+		p.certRegen(domains)
+	}
 
 	routeType := string(route.Type)
 	if routeType == "" {
@@ -98,27 +121,27 @@ func (p *DomainProxy) AddRoute(route *loka.DomainRoute) {
 		targetID = route.ServiceID
 	}
 	p.logger.Info("domain route added",
-		"subdomain", route.Subdomain,
+		"domain", route.Domain,
 		"type", routeType,
 		"target", targetID,
 		"port", route.RemotePort,
-		"url", fmt.Sprintf("https://%s.%s", route.Subdomain, p.baseDomain))
+		"domain", route.Domain)
 }
 
-// RemoveRoute removes a subdomain mapping.
-func (p *DomainProxy) RemoveRoute(subdomain string) bool {
+// RemoveRoute removes a domain mapping.
+func (p *DomainProxy) RemoveRoute(domain string) bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	_, ok := p.routes[subdomain]
-	delete(p.routes, subdomain)
+	_, ok := p.routes[domain]
+	delete(p.routes, domain)
 	return ok
 }
 
-// GetRoute returns a route by subdomain.
-func (p *DomainProxy) GetRoute(subdomain string) *loka.DomainRoute {
+// GetRoute returns a route by domain.
+func (p *DomainProxy) GetRoute(domain string) *loka.DomainRoute {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	return p.routes[subdomain]
+	return p.routes[domain]
 }
 
 // ListRoutes returns all active routes.
@@ -142,20 +165,29 @@ func (p *DomainProxy) Handler() http.Handler {
 			host = h
 		}
 
-		// Extract subdomain from host.
-		subdomain := ""
-		if strings.HasSuffix(host, "."+p.baseDomain) {
-			subdomain = strings.TrimSuffix(host, "."+p.baseDomain)
-		}
-
-		if subdomain == "" {
-			http.Error(w, fmt.Sprintf("Unknown host: %s. Expected *.%s", host, p.baseDomain), http.StatusNotFound)
-			return
-		}
-
-		route := p.GetRoute(subdomain)
+		// Match host directly against registered domains.
+		route := p.GetRoute(host)
 		if route == nil {
-			http.Error(w, fmt.Sprintf("No route for %s.%s", subdomain, p.baseDomain), http.StatusNotFound)
+			// For localhost/127.0.0.1, show available routes.
+			if host == "localhost" || host == "127.0.0.1" {
+				routes := p.ListRoutes()
+				w.Header().Set("Content-Type", "text/html; charset=utf-8")
+				w.WriteHeader(http.StatusOK)
+				fmt.Fprintf(w, "<html><head><title>LOKA</title></head><body>")
+				fmt.Fprintf(w, "<h2>LOKA Domain Proxy</h2>")
+				if len(routes) == 0 {
+					fmt.Fprintf(w, "<p>No services deployed. Deploy with: <code>loka deploy</code></p>")
+				} else {
+					fmt.Fprintf(w, "<ul>")
+					for _, rt := range routes {
+						fmt.Fprintf(w, "<li><a href=\"http://%s\">%s</a> → port %d</li>", rt.Domain, rt.Domain, rt.RemotePort)
+					}
+					fmt.Fprintf(w, "</ul>")
+				}
+				fmt.Fprintf(w, "</body></html>")
+				return
+			}
+			http.Error(w, fmt.Sprintf("No route for host %s", host), http.StatusNotFound)
 			return
 		}
 
@@ -464,16 +496,20 @@ func (s *Server) registerDomainRoutes(r chi.Router, proxy *DomainProxy) {
 			return
 		}
 		var req struct {
-			Subdomain  string `json:"subdomain"`
+			Domain     string `json:"domain"`
 			RemotePort int    `json:"remote_port"`
 		}
 		if err := decodeJSON(r, &req); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid request body")
 			return
 		}
-		if req.Subdomain == "" {
-			writeError(w, http.StatusBadRequest, "subdomain is required")
+		if req.Domain == "" {
+			writeError(w, http.StatusBadRequest, "domain is required")
 			return
+		}
+		// Auto-append .loka TLD for bare names.
+		if !strings.Contains(req.Domain, ".") {
+			req.Domain = req.Domain + ".loka"
 		}
 		if req.RemotePort <= 0 {
 			writeError(w, http.StatusBadRequest, "remote_port is required")
@@ -486,15 +522,15 @@ func (s *Server) registerDomainRoutes(r chi.Router, proxy *DomainProxy) {
 			return
 		}
 
-		// Check subdomain not taken.
-		if existing := proxy.GetRoute(req.Subdomain); existing != nil {
-			writeError(w, http.StatusConflict, fmt.Sprintf("subdomain %q already in use by session %s", req.Subdomain, existing.SessionID))
+		// Check domain not taken.
+		if existing := proxy.GetRoute(req.Domain); existing != nil {
+			writeError(w, http.StatusConflict, fmt.Sprintf("domain %q already in use by session %s", req.Domain, existing.SessionID))
 			return
 		}
 
 		route := &loka.DomainRoute{
-			ID:         req.Subdomain,
-			Subdomain:  req.Subdomain,
+			ID:        req.Domain,
+			Domain:    req.Domain,
 			SessionID:  sessionID,
 			RemotePort: req.RemotePort,
 			Type:       loka.DomainRouteSession,
@@ -502,24 +538,24 @@ func (s *Server) registerDomainRoutes(r chi.Router, proxy *DomainProxy) {
 		proxy.AddRoute(route)
 
 		writeJSON(w, http.StatusCreated, map[string]any{
-			"subdomain":  req.Subdomain,
+			"domain":     req.Domain,
 			"session_id": sessionID,
 			"port":       req.RemotePort,
-			"url":        fmt.Sprintf("https://%s.%s", req.Subdomain, proxy.baseDomain),
+			"url":        fmt.Sprintf("https://%s", req.Domain),
 		})
 	})
 
-	r.Delete("/api/v1/sessions/{id}/expose/{subdomain}", func(w http.ResponseWriter, r *http.Request) {
-		subdomain := chi.URLParam(r, "subdomain")
-		if proxy.RemoveRoute(subdomain) {
-			writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "subdomain": subdomain})
+	r.Delete("/api/v1/sessions/{id}/expose/{domain}", func(w http.ResponseWriter, r *http.Request) {
+		domain := chi.URLParam(r, "domain")
+		if proxy.RemoveRoute(domain) {
+			writeJSON(w, http.StatusOK, map[string]string{"status": "removed", "domain": domain})
 		} else {
-			writeError(w, http.StatusNotFound, fmt.Sprintf("no route for %q", subdomain))
+			writeError(w, http.StatusNotFound, fmt.Sprintf("no route for %q", domain))
 		}
 	})
 
 	r.Get("/api/v1/domains", func(w http.ResponseWriter, r *http.Request) {
 		routes := proxy.ListRoutes()
-		writeJSON(w, http.StatusOK, map[string]any{"routes": routes, "base_domain": proxy.baseDomain})
+		writeJSON(w, http.StatusOK, map[string]any{"routes": routes})
 	})
 }

@@ -144,27 +144,51 @@ install-vm-assets:
 		echo "  ! build/initramfs.cpio.gz not found — run 'make kernel' first"; \
 	fi
 
-# Install LOKA locally from source.
-# Installs binaries + kernel + initramfs + Cloud Hypervisor (Linux).
-INSTALL_DIR ?= /usr/local/bin
+# Install LOKA locally from source (no sudo required).
+# Installs binaries to ~/.loka/bin/, kernel + initramfs to ~/.loka/vm/.
+# Add ~/.loka/bin to your PATH.
+INSTALL_DIR = $(HOME)/.loka/bin
+SYMLINK_DIR ?= $(HOME)/.local/bin
 install: build
 	@echo "==> Installing LOKA"
-	sudo install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
-	sudo install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
-	sudo install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
+	@mkdir -p $(INSTALL_DIR) $(SYMLINK_DIR)
+	install -m 755 $(LOKA_CLI) $(INSTALL_DIR)/loka
+	install -m 755 $(LOKAD) $(INSTALL_DIR)/lokad
+	install -m 755 $(LOKA_SUPERVISOR) $(INSTALL_DIR)/loka-supervisor
+	@if [ -f bin/loka-proxy ]; then install -m 755 bin/loka-proxy $(INSTALL_DIR)/loka-proxy; fi
+	@# Install Linux supervisor for VM injection (if cross-compiled).
+	@if [ -f bin/linux-arm64/loka-supervisor ]; then \
+		mkdir -p $(INSTALL_DIR)/linux-arm64; \
+		install -m 755 bin/linux-arm64/loka-supervisor $(INSTALL_DIR)/linux-arm64/loka-supervisor; \
+		echo "  linux supervisor → $(INSTALL_DIR)/linux-arm64/"; \
+	fi
+	@if [ -f bin/linux-amd64/loka-supervisor ]; then \
+		mkdir -p $(INSTALL_DIR)/linux-amd64; \
+		install -m 755 bin/linux-amd64/loka-supervisor $(INSTALL_DIR)/linux-amd64/loka-supervisor; \
+	fi
+ifeq ($(UNAME_S),Darwin)
+	@# Sign lokad with VZ entitlement (needed for Apple Virtualization Framework).
+	@codesign --entitlements /dev/stdin --force -s - $(INSTALL_DIR)/lokad 2>/dev/null <<< \
+		'<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>' || true
+endif
+	@# Symlink to ~/.local/bin for PATH access.
+	@ln -sf $(INSTALL_DIR)/loka $(SYMLINK_DIR)/loka
+	@ln -sf $(INSTALL_DIR)/lokad $(SYMLINK_DIR)/lokad
+	@echo "  binaries → $(INSTALL_DIR)/"
+	@echo "  symlinks → $(SYMLINK_DIR)/"
 	@# Install kernel + initramfs to ~/.loka/vm/.
 	@mkdir -p $(HOME)/.loka/vm
 	@if [ -f build/vmlinux-lokavm ]; then \
 		cp build/vmlinux-lokavm $(HOME)/.loka/vm/vmlinux-lokavm; \
-		echo "  kernel → ~/.loka/vm/vmlinux-lokavm"; \
+		echo "  kernel  → ~/.loka/vm/vmlinux-lokavm"; \
 	else \
-		echo "  ⚠ build/vmlinux-lokavm not found — run 'make kernel' first"; \
+		echo "  ! build/vmlinux-lokavm not found — run 'make kernel' first"; \
 	fi
 	@if [ -f build/initramfs.cpio.gz ]; then \
 		cp build/initramfs.cpio.gz $(HOME)/.loka/vm/initramfs.cpio.gz; \
 		echo "  initramfs → ~/.loka/vm/initramfs.cpio.gz"; \
 	else \
-		echo "  ⚠ build/initramfs.cpio.gz not found — run 'make initramfs' first"; \
+		echo "  ! build/initramfs.cpio.gz not found — run 'make initramfs' first"; \
 	fi
 ifeq ($(UNAME_S),Linux)
 	@if ! command -v cloud-hypervisor >/dev/null 2>&1; then \
@@ -174,17 +198,18 @@ ifeq ($(UNAME_S),Linux)
 		echo "  cloud-hypervisor already installed"; \
 	fi
 endif
-ifeq ($(UNAME_S),Darwin)
-	@# Sign lokad with VZ entitlement (needed for Apple Virtualization Framework).
-	@codesign --entitlements /dev/stdin --force -s - $(INSTALL_DIR)/lokad 2>/dev/null <<< \
-		'<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd"><plist version="1.0"><dict><key>com.apple.security.virtualization</key><true/></dict></plist>' || true
-endif
-	@echo "  LOKA installed. Run: lokad"
+	@# Ensure ~/.local/bin is on PATH.
+	@if ! echo "$$PATH" | tr ':' '\n' | grep -qx "$(SYMLINK_DIR)"; then \
+		echo ""; \
+		echo "  Add to your shell profile:"; \
+		echo "    export PATH=\"$(SYMLINK_DIR):\$$PATH\""; \
+	fi
+	@echo "  LOKA installed."
 
 # Uninstall LOKA
 uninstall:
 	@echo "==> Uninstalling LOKA"
-	-sudo rm -f $(INSTALL_DIR)/loka $(INSTALL_DIR)/lokad $(INSTALL_DIR)/loka-supervisor
+	-rm -f $(SYMLINK_DIR)/loka $(SYMLINK_DIR)/lokad
 	-rm -rf $(HOME)/.loka
 	@echo "  LOKA uninstalled"
 
@@ -221,7 +246,7 @@ release: build
 	@ls -lh release/loka-$(RELEASE_GOOS)-$(RELEASE_GOARCH).tar.gz
 	@echo "  Release package ready"
 
-# Build custom Linux kernel for lokavm (uses loka-build, not Lima)
+# Build custom Linux kernel for lokavm (cross-compiled on host)
 kernel: $(LOKA_BUILD)
 	@if [ -f build/vmlinux-lokavm ]; then \
 		echo "  kernel exists (build/vmlinux-lokavm), skipping. Delete to rebuild."; \
@@ -229,7 +254,7 @@ kernel: $(LOKA_BUILD)
 		$(LOKA_BUILD) kernel --arch=$(UNAME_M); \
 	fi
 
-# Build initramfs for lokavm
+# Build initramfs for lokavm (built on host)
 initramfs: $(LOKA_BUILD)
 	@if [ -f build/initramfs.cpio.gz ]; then \
 		echo "  initramfs exists (build/initramfs.cpio.gz), skipping. Delete to rebuild."; \
@@ -287,8 +312,8 @@ help:
 	@echo "  uninstall            Remove LOKA and all data"
 	@echo "  e2e-test             Run E2E test suite (native)"
 	@echo "  e2e-test-linux       Run E2E in Linux VM (from macOS/CI)"
-	@echo "  kernel               Build Linux kernel (uses loka-build VM)"
-	@echo "  initramfs            Build initramfs (uses loka-build VM)"
+	@echo "  kernel               Build Linux kernel (cross-compiled on host)"
+	@echo "  initramfs            Build initramfs (built on host)"
 	@echo "  kernel-all           Build both kernel + initramfs"
 	@echo "  kernel-update        Update pinned kernel version to latest stable"
 	@echo "  release              Create release tar.gz with binaries + kernel + initramfs"

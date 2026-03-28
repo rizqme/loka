@@ -2,23 +2,65 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"text/tabwriter"
 
 	"github.com/spf13/cobra"
 )
 
-func newCurrentCmd() *cobra.Command {
+func newSpaceCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "space",
+		Short: "Manage LOKA spaces (servers/deployments)",
+	}
+	cmd.AddCommand(
+		newSpaceListCmd(),
+		newSpaceUseCmd(),
+		newSpaceCurrentCmd(),
+		newDeployDownCmd(),
+		newDeployStatusCmd(),
+		newDeployDestroyCmd(),
+	)
+	return cmd
+}
+
+func newSpaceListCmd() *cobra.Command {
+	return &cobra.Command{
+		Use: "list", Short: "List spaces", Aliases: []string{"ls"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			store, _ := loadDeployments()
+			if len(store.Deployments) == 0 {
+				fmt.Println("No spaces. Set one up: loka setup local --name dev")
+				return nil
+			}
+			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+			fmt.Fprintln(w, "  NAME\tSPACE\tENDPOINT\tWORKERS\tSTATUS\tCREATED")
+			for _, d := range store.Deployments {
+				a := " "
+				if d.Name == store.Active {
+					a = "*"
+				}
+				fmt.Fprintf(w, "%s %s\t%s\t%s\t%d\t%s\t%s\n", a, d.Name, d.Provider, d.Endpoint, d.Workers, d.Status, d.CreatedAt.Format("2006-01-02"))
+			}
+			w.Flush()
+			return nil
+		},
+	}
+}
+
+func newSpaceCurrentCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "current",
-		Short: "Show the active server",
+		Short: "Show the active space",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, _ := loadDeployments()
 			d := store.GetActive()
 			if d == nil {
-				fmt.Println("No active server. Set one up: loka setup local")
+				fmt.Println("No active space. Set one up: loka setup local")
 				return nil
 			}
 			fmt.Printf("Name:     %s\n", d.Name)
-			fmt.Printf("Provider: %s\n", d.Provider)
+			fmt.Printf("Space:    %s\n", d.Provider)
 			fmt.Printf("Endpoint: %s\n", d.Endpoint)
 			fmt.Printf("Workers:  %d\n", d.Workers)
 			fmt.Printf("Status:   %s\n", d.Status)
@@ -27,11 +69,12 @@ func newCurrentCmd() *cobra.Command {
 	}
 }
 
-func newUseCmd() *cobra.Command {
+func newSpaceUseCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "use <server>",
-		Short: "Switch active server",
-		Long:  "Switch which server all commands target.",
+		Use:     "select <space>",
+		Short:   "Switch active space",
+		Long:    "Switch which space all commands target.",
+		Aliases: []string{"use"},
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			store, err := loadDeployments()

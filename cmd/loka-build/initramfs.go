@@ -2,10 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
+	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
-
-	"github.com/vyprai/loka/pkg/lokavm"
 )
 
 func buildInitramfs(cfg buildConfig) error {
@@ -27,79 +28,120 @@ func buildInitramfs(cfg buildConfig) error {
 
 	cfg.Logger.Info("building initramfs", "arch", cfg.Arch, "output", outputFile)
 
-	// Pull build image (reuse cached).
-	rootfsDir, err := pullBuildImage(cfg)
+	// Create temporary build directory.
+	initramfsDir, err := os.MkdirTemp("", "loka-initramfs-*")
 	if err != nil {
-		return fmt.Errorf("pull image: %w", err)
+		return fmt.Errorf("create temp dir: %w", err)
+	}
+	defer os.RemoveAll(initramfsDir)
+
+	// Create directory structure.
+	for _, d := range []string{
+		"bin", "sbin", "dev", "proc", "sys", "mnt", "tmp",
+		"usr/local/bin", "etc", "workspace",
+	} {
+		os.MkdirAll(filepath.Join(initramfsDir, d), 0o755)
 	}
 
-	// Create scratch directory.
-	buildDir, err := os.MkdirTemp("", "loka-initramfs-build-*")
+	// Download busybox static binary.
+	if err := downloadBusybox(cfg, initramfsDir); err != nil {
+		return fmt.Errorf("download busybox: %w", err)
+	}
+
+	// Create busybox symlinks.
+	for _, cmd := range []string{
+		"sh", "ash", "cat", "ls", "mkdir", "mount", "umount",
+		"ln", "cp", "mv", "rm", "echo", "sleep", "mknod",
+		"grep", "sed", "awk", "ip", "ifconfig", "route", "hostname",
+	} {
+		os.Symlink("busybox", filepath.Join(initramfsDir, "bin", cmd))
+	}
+
+	// Copy supervisor if available.
+	arch := cfg.Arch
+	for _, p := range []string{
+		filepath.Join(projectDir, "build", "linux-"+arch, "loka-supervisor"),
+		filepath.Join(projectDir, "bin", "linux-"+arch, "loka-supervisor"),
+	} {
+		if data, err := os.ReadFile(p); err == nil {
+			os.WriteFile(filepath.Join(initramfsDir, "usr/local/bin/loka-supervisor"), data, 0o755)
+			cfg.Logger.Info("included supervisor", "from", p)
+			break
+		}
+	}
+
+	// Write init script.
+	if err := os.WriteFile(filepath.Join(initramfsDir, "init"), []byte(initScript), 0o755); err != nil {
+		return fmt.Errorf("write init: %w", err)
+	}
+
+	// Create cpio.gz archive.
+	cfg.Logger.Info("creating cpio archive")
+	absOutput, _ := filepath.Abs(outputFile)
+	outFile, err := os.Create(absOutput)
 	if err != nil {
-		return fmt.Errorf("create build dir: %w", err)
+		return fmt.Errorf("create output: %w", err)
 	}
-	defer os.RemoveAll(buildDir)
+	defer outFile.Close()
 
-	// Write build script.
-	script := generateInitramfsBuildScript(cfg)
-	if err := os.WriteFile(filepath.Join(buildDir, "build.sh"), []byte(script), 0o755); err != nil {
-		return fmt.Errorf("write build script: %w", err)
+	cmd := exec.Command("sh", "-c", "find . | cpio -H newc -o 2>/dev/null | gzip -9")
+	cmd.Dir = initramfsDir
+	cmd.Stdout = outFile
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("create cpio archive: %w", err)
 	}
 
-	absOutput, _ := filepath.Abs(cfg.OutputDir)
-	absProject, _ := filepath.Abs(projectDir)
+	info, _ := os.Stat(absOutput)
+	cfg.Logger.Info("initramfs build complete",
+		"output", outputFile,
+		"size_kb", info.Size()/1024)
 
-	return runBuildVM(cfg, rootfsDir, []lokavm.SharedDir{
-		{Tag: "workspace", HostPath: absProject, GuestPath: "/workspace", ReadOnly: true},
-		{Tag: "output", HostPath: absOutput, GuestPath: "/output", ReadOnly: false},
-		{Tag: "build", HostPath: buildDir, GuestPath: "/build", ReadOnly: false},
-	}, "/build/build.sh")
+	return nil
 }
 
-func generateInitramfsBuildScript(cfg buildConfig) string {
+func downloadBusybox(cfg buildConfig, initramfsDir string) error {
 	busyboxArch := "armv8l"
 	if cfg.Arch == "amd64" || cfg.Arch == "x86_64" {
 		busyboxArch = "x86_64"
 	}
 
-	return fmt.Sprintf(`#!/bin/sh
-set -e
+	url := fmt.Sprintf(
+		"https://busybox.net/downloads/binaries/1.36.1-defconfig-multiarch-musl/busybox-%s",
+		busyboxArch)
+	dest := filepath.Join(initramfsDir, "bin", "busybox")
 
-echo "==> Building initramfs..."
-apt-get update -qq
-apt-get install -y -qq wget cpio gzip
+	cfg.Logger.Info("downloading busybox", "arch", busyboxArch)
 
-cd /build
-INITRAMFS_DIR=/build/initramfs
-rm -rf "$INITRAMFS_DIR"
-mkdir -p "$INITRAMFS_DIR"/{bin,sbin,dev,proc,sys,mnt,tmp,usr/local/bin,etc,workspace}
+	resp, err := http.Get(url)
+	if err != nil {
+		return fmt.Errorf("download %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("download %s: HTTP %d", url, resp.StatusCode)
+	}
 
-# Download busybox static.
-BUSYBOX_VER="1.36.1"
-echo "==> Downloading busybox ${BUSYBOX_VER} (%s)..."
-wget -q "https://busybox.net/downloads/binaries/${BUSYBOX_VER}-defconfig-multiarch-musl/busybox-%s" -O "$INITRAMFS_DIR/bin/busybox"
-chmod +x "$INITRAMFS_DIR/bin/busybox"
+	f, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
 
-# Create busybox symlinks.
-for cmd in sh ash cat ls mkdir mount umount ln cp mv rm echo sleep mknod grep sed awk ip ifconfig route hostname; do
-    ln -sf busybox "$INITRAMFS_DIR/bin/$cmd"
-done
+	if _, err := io.Copy(f, resp.Body); err != nil {
+		return err
+	}
 
-# Copy supervisor if available.
-if [ -f /workspace/build/linux-%s/loka-supervisor ]; then
-    cp /workspace/build/linux-%s/loka-supervisor "$INITRAMFS_DIR/usr/local/bin/loka-supervisor"
-elif [ -f /workspace/bin/linux-%s/loka-supervisor ]; then
-    cp /workspace/bin/linux-%s/loka-supervisor "$INITRAMFS_DIR/usr/local/bin/loka-supervisor"
-fi
+	return os.Chmod(dest, 0o755)
+}
 
-# Create init script.
-cat > "$INITRAMFS_DIR/init" << 'INITEOF'
-#!/bin/sh
+const initScript = `#!/bin/sh
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
 mkdir -p /dev/pts /dev/shm
-mount -t devpts devpts /dev/pts
+mount -t devpts -o newinstance,ptmxmode=0666 devpts /dev/pts
+ln -sf pts/ptmx /dev/ptmx
 mount -t tmpfs tmpfs /dev/shm
 mount -t tmpfs tmpfs /tmp
 
@@ -129,9 +171,33 @@ for param in $(cat /proc/cmdline); do
             mount -t virtiofs upper /upper 2>/dev/null || mount -t tmpfs tmpfs /upper
             mkdir -p /upper/data /upper/work
             mount -t overlay overlay -o "lowerdir=$lower,upperdir=/upper/data,workdir=/upper/work" /merged
-            # Pivot to merged root.
-            mkdir -p /merged/dev /merged/proc /merged/sys /merged/tmp
-            exec switch_root /merged /sbin/init 2>/dev/null || exec chroot /merged /bin/sh
+            # Set up merged root.
+            mkdir -p /merged/dev /merged/proc /merged/sys /merged/tmp /merged/run
+            mount -t proc proc /merged/proc
+            mount -t sysfs sysfs /merged/sys
+            mount -t devtmpfs devtmpfs /merged/dev
+            mkdir -p /merged/dev/pts /merged/dev/shm
+            mount -t devpts -o newinstance,ptmxmode=0666 devpts /merged/dev/pts
+            mount -t tmpfs tmpfs /merged/dev/shm
+            mount -t tmpfs tmpfs /merged/tmp
+            mount -t tmpfs tmpfs /merged/run
+            ln -sf pts/ptmx /merged/dev/ptmx
+            mknod /merged/dev/vsock c 10 91 2>/dev/null || true
+            # Mount additional virtiofs volumes inside merged root.
+            for p2 in $(cat /proc/cmdline); do
+                case "$p2" in
+                    loka.virtiofs=*)
+                        vfs_tag_path="${p2#loka.virtiofs=}"
+                        vfs_tag="${vfs_tag_path%%:*}"
+                        vfs_mpath="${vfs_tag_path#*:}"
+                        mkdir -p "/merged$vfs_mpath"
+                        mount -t virtiofs "$vfs_tag" "/merged$vfs_mpath" 2>/dev/null || true
+                        ;;
+                esac
+            done
+            # Set up loopback before switch_root (network persists across pivot).
+            ip link set lo up 2>/dev/null || true
+            exec switch_root /merged /usr/local/bin/loka-supervisor 2>/dev/null || exec chroot /merged /bin/sh
             ;;
     esac
 done
@@ -164,15 +230,4 @@ fi
 
 # Fallback: drop to shell.
 exec /bin/sh
-INITEOF
-chmod +x "$INITRAMFS_DIR/init"
-
-# Build cpio archive.
-echo "==> Creating initramfs.cpio.gz..."
-cd "$INITRAMFS_DIR"
-find . | cpio -H newc -o 2>/dev/null | gzip -9 > /output/initramfs.cpio.gz
-ls -lh /output/initramfs.cpio.gz
-echo "==> Initramfs build complete"
-`, busyboxArch, busyboxArch,
-		cfg.Arch, cfg.Arch, cfg.Arch, cfg.Arch)
-}
+`

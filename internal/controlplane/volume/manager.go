@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,15 +20,29 @@ import (
 const volumeBucket = "volumes"
 
 // Manager handles named volume lifecycle in the control plane.
+// Volumes are stored as local directories at {dataDir}/volumes/{name}/ for fast
+// virtiofs access. They are also backed to objstore for persistence and cross-worker sync.
 type Manager struct {
 	store    store.Store
 	objStore objstore.ObjectStore
+	dataDir  string // Root data directory (volumes live at {dataDir}/volumes/).
 	logger   *slog.Logger
 }
 
 // NewManager creates a new volume manager.
-func NewManager(s store.Store, objStore objstore.ObjectStore, logger *slog.Logger) *Manager {
-	return &Manager{store: s, objStore: objStore, logger: logger}
+func NewManager(s store.Store, objStore objstore.ObjectStore, dataDir string, logger *slog.Logger) *Manager {
+	os.MkdirAll(filepath.Join(dataDir, "volumes"), 0o755)
+	return &Manager{store: s, objStore: objStore, dataDir: dataDir, logger: logger}
+}
+
+// VolumePath returns the local directory path for a named volume.
+func (m *Manager) VolumePath(name string) string {
+	return filepath.Join(m.dataDir, "volumes", name)
+}
+
+// BundlePath returns the local directory path for a bundle (readonly).
+func (m *Manager) BundlePath(name string) string {
+	return filepath.Join(m.dataDir, "bundles", name)
 }
 
 // Create creates a new named volume record.
@@ -137,7 +153,7 @@ func (m *Manager) ListFiles(ctx context.Context, name string) ([]objstore.Object
 }
 
 // ExtractBundle downloads a bundle tar.gz from the object store and extracts
-// its contents into a named volume directory in the volumes bucket.
+// its contents into a local volume directory for fast virtiofs access.
 // The bundleKey format is "bucket/key" (e.g. "services/abc/bundle.tar.gz").
 func (m *Manager) ExtractBundle(ctx context.Context, volName, bundleKey string) error {
 	if m.objStore == nil {
@@ -165,7 +181,10 @@ func (m *Manager) ExtractBundle(ctx context.Context, volName, bundleKey string) 
 	}
 	defer gzReader.Close()
 
-	// Extract tar entries into the volume's objstore prefix.
+	// Extract tar entries to the readonly bundles directory.
+	volDir := m.BundlePath(volName)
+	os.MkdirAll(volDir, 0o755)
+
 	tarReader := tar.NewReader(gzReader)
 	fileCount := 0
 	for {
@@ -177,28 +196,33 @@ func (m *Manager) ExtractBundle(ctx context.Context, volName, bundleKey string) 
 			return fmt.Errorf("tar read: %w", err)
 		}
 
-		// Skip directories — they are implicit in objstore.
-		if header.Typeflag == tar.TypeDir {
-			continue
-		}
+		target := filepath.Join(volDir, filepath.Clean(header.Name))
 
-		// Only extract regular files.
-		if header.Typeflag != tar.TypeReg {
-			continue
+		switch header.Typeflag {
+		case tar.TypeDir:
+			os.MkdirAll(target, os.FileMode(header.Mode)|0o755)
+		case tar.TypeReg:
+			os.MkdirAll(filepath.Dir(target), 0o755)
+			f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, os.FileMode(header.Mode))
+			if err != nil {
+				continue
+			}
+			io.Copy(f, tarReader)
+			f.Close()
+			fileCount++
+		case tar.TypeSymlink:
+			os.MkdirAll(filepath.Dir(target), 0o755)
+			os.Remove(target)
+			os.Symlink(header.Linkname, target)
+			fileCount++
 		}
-
-		// Store each file under volumes/{volName}/{file_path}.
-		objKey := volName + "/" + header.Name
-		if err := m.objStore.Put(ctx, volumeBucket, objKey, tarReader, header.Size); err != nil {
-			return fmt.Errorf("store file %s: %w", header.Name, err)
-		}
-		fileCount++
 	}
 
 	m.logger.Info("bundle extracted into volume",
 		"volume", volName,
 		"bundle_key", bundleKey,
 		"files", fileCount,
+		"path", volDir,
 	)
 	return nil
 }

@@ -1,0 +1,137 @@
+---
+title: Deploying Applications
+description: Deploy source projects, Docker images, and Docker Compose apps
+---
+
+# Deploying Applications
+
+LOKA can deploy applications from multiple sources: Docker images, source directories, Docker Compose files, and multi-component `loka.yaml` configurations.
+
+## Deploy a Docker image
+
+The simplest deployment -- run any Docker image as a service:
+
+```bash
+loka deploy nginx:latest --name my-app
+loka deploy postgres:16 --name db --port 5432
+loka deploy redis:7 --name cache
+```
+
+With DNS enabled (`loka dns enable`), services are accessible at `http://<name>.loka`.
+
+## Deploy from source
+
+Deploy the current directory as an application. LOKA detects the language/framework and builds automatically:
+
+```bash
+cd my-project
+loka deploy . --name my-api
+```
+
+LOKA looks for common project files (`Dockerfile`, `package.json`, `requirements.txt`, `go.mod`, etc.) to determine how to build and run the application.
+
+## Deploy with Docker Compose
+
+Deploy a multi-service application defined in a `docker-compose.yml`:
+
+```bash
+loka deploy --compose docker-compose.yml
+```
+
+See [Docker Compose](/compose) for details.
+
+## Deploy multi-component apps
+
+For more control, define your application in a `loka.yaml` file:
+
+```yaml
+name: my-app
+components:
+  web:
+    image: node:20
+    command: npm start
+    port: 3000
+    routes:
+      - path: /
+    health:
+      path: /health
+      interval: 10s
+  api:
+    image: python:3.12-slim
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    port: 8000
+    routes:
+      - path: /api
+    mounts:
+      - volume: app-data
+        path: /data
+  worker:
+    image: python:3.12-slim
+    command: celery -A tasks worker
+    env:
+      REDIS_URL: redis://cache:6379
+```
+
+```bash
+loka deploy --config loka.yaml
+```
+
+See [loka.yaml Reference](/loka-yaml) for the full configuration format.
+
+## Recipes
+
+Recipes are pre-built configurations for common stacks:
+
+```bash
+loka recipe list                           # List available recipes
+loka recipe add my-recipe ./recipe.yaml    # Add a custom recipe
+loka deploy --recipe wordpress             # Deploy from a recipe
+```
+
+## Redeploying
+
+Update a running service with a new image or source:
+
+```bash
+loka deploy nginx:latest --name my-app --force    # Redeploy with latest image
+loka service redeploy my-app                      # Redeploy with current config
+```
+
+## Environment variables
+
+Set environment variables for a service:
+
+```bash
+loka service env my-app --set DATABASE_URL=postgres://...
+loka service env my-app --set NODE_ENV=production
+```
+
+Or define them in `loka.yaml`:
+
+```yaml
+components:
+  web:
+    env:
+      NODE_ENV: production
+      PORT: "3000"
+```
+
+## Managing deployed services
+
+```bash
+loka service list                          # List all services
+loka service get my-app                    # Service details
+loka service logs my-app                   # Tail logs
+loka service stop my-app                   # Stop
+loka service rm my-app                     # Remove
+```
+
+See [Services](/services) for more details.
+
+## Next steps
+
+- [Docker Compose](/compose) -- deploy multi-service apps from `docker-compose.yml`
+- [loka.yaml Reference](/loka-yaml) -- full project configuration format
+- [Services](/services) -- managing deployed services
+- [Domains & DNS](/domains) -- route traffic to your services
+- [Volumes](/volumes) -- persistent storage for your apps

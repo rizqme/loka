@@ -2,6 +2,7 @@ package api
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/vyprai/loka/internal/loka"
@@ -86,4 +87,78 @@ func (s *Server) deleteVolume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// ── Volume Locks ────────────────────────────────────────
+
+// acquireVolumeLock acquires a file lock on a volume.
+// POST /api/v1/volumes/{name}/lock
+func (s *Server) acquireVolumeLock(w http.ResponseWriter, r *http.Request) {
+	if s.lockManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "lock manager not available")
+		return
+	}
+
+	volume := chi.URLParam(r, "name")
+	var req struct {
+		Path      string `json:"path"`
+		WorkerID  string `json:"worker_id"`
+		Exclusive bool   `json:"exclusive"`
+		TTL       int    `json:"ttl"` // Seconds.
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if req.Path == "" {
+		writeError(w, http.StatusBadRequest, "path is required")
+		return
+	}
+
+	ttl := time.Duration(req.TTL) * time.Second
+	if err := s.lockManager.Acquire(volume, req.Path, req.WorkerID, req.Exclusive, ttl); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "locked"})
+}
+
+// releaseVolumeLock releases a file lock on a volume.
+// DELETE /api/v1/volumes/{name}/lock
+func (s *Server) releaseVolumeLock(w http.ResponseWriter, r *http.Request) {
+	if s.lockManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "lock manager not available")
+		return
+	}
+
+	volume := chi.URLParam(r, "name")
+	var req struct {
+		Path     string `json:"path"`
+		WorkerID string `json:"worker_id"`
+	}
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := s.lockManager.Release(volume, req.Path, req.WorkerID); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "unlocked"})
+}
+
+// listVolumeLocks returns all active locks for a volume.
+// GET /api/v1/volumes/{name}/locks
+func (s *Server) listVolumeLocks(w http.ResponseWriter, r *http.Request) {
+	if s.lockManager == nil {
+		writeError(w, http.StatusServiceUnavailable, "lock manager not available")
+		return
+	}
+
+	volume := chi.URLParam(r, "name")
+	locks := s.lockManager.ListLocks(volume)
+	writeJSON(w, http.StatusOK, map[string]any{"locks": locks})
 }

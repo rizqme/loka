@@ -6,7 +6,7 @@ import "time"
 // Providers:
 //   - "local":   Host directory shared via virtiofs (same host only).
 //   - "volume":  Named persistent volume (host directory managed by control plane).
-//   - "store":   NFS-backed shared storage (cross-worker, lockable, centralized on control plane).
+//   - "store":   Shared storage (cross-worker sync via objstore, lockable via control plane).
 //   - "github":  Git repository checkout (cached by commit SHA, readonly).
 //   - "s3":      S3 object storage bucket.
 //   - "gcs":     Google Cloud Storage bucket.
@@ -49,7 +49,7 @@ func (v Volume) IsReadOnly() bool {
 }
 
 // EffectiveMode returns the mount mode for the VMM:
-//   - "virtiofs": shared via virtiofs (host dir, NFS mount, or object cache dir)
+//   - "virtiofs": shared via virtiofs (host dir or local volume cache)
 //   - "block":    attached as ext4 block device (legacy, readonly)
 //   - "fuse":     FUSE-over-vsock (legacy, readwrite with sync)
 func (v Volume) EffectiveMode() string {

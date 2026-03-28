@@ -33,13 +33,13 @@ type RetentionConfig struct {
 	CleanupInterval string `yaml:"cleanup_interval"`  // Default "1h"
 }
 
-// DomainConfig configures the optional subdomain-based reverse proxy.
+// DomainConfig configures the optional domain-based reverse proxy.
 type DomainConfig struct {
 	Enabled    bool   `yaml:"enabled"`     // Enable domain forwarding.
-	BaseDomain string `yaml:"base_domain"` // e.g. "loka.example.com" → {subdomain}.loka.example.com
 	ListenAddr string `yaml:"listen_addr"` // Separate listener for proxied traffic (default ":6843")
 	DNSAddr    string `yaml:"dns_addr"`    // DNS server listen address (default ":5453")
 	DNSEnabled bool   `yaml:"dns_enabled"` // Enable built-in DNS server.
+	DNSDomain  string `yaml:"dns_domain"`  // TLD for built-in DNS resolution (default "loka")
 }
 
 // AuthConfig configures API authentication.
@@ -166,9 +166,14 @@ func (c *ControlPlaneConfig) Defaults() {
 		c.Retention.CleanupInterval = "1h"
 	}
 
-	// Domain proxy defaults.
-	if c.Domain.BaseDomain == "" {
-		c.Domain.BaseDomain = "loka"
+	// Domain proxy defaults — enable by default for local (all-in-one) setups.
+	if c.Role == "" || c.Role == "all" {
+		if !c.Domain.Enabled {
+			c.Domain.Enabled = true
+		}
+	}
+	if c.Domain.DNSDomain == "" {
+		c.Domain.DNSDomain = "loka"
 	}
 	if c.Domain.ListenAddr == "" {
 		c.Domain.ListenAddr = ":6843"

@@ -13,6 +13,7 @@ import (
 	"github.com/vyprai/loka/internal/controlplane/image"
 	"github.com/vyprai/loka/internal/controlplane/service"
 	"github.com/vyprai/loka/internal/controlplane/session"
+	"github.com/vyprai/loka/internal/controlplane/lock"
 	"github.com/vyprai/loka/internal/controlplane/volume"
 	"github.com/vyprai/loka/internal/controlplane/worker"
 	"github.com/vyprai/loka/internal/objstore"
@@ -38,7 +39,8 @@ type Server struct {
 	retention        config.RetentionConfig
 	caCertPath       string // Path to CA certificate (served at /ca.crt).
 	volumeManager    *volume.Manager // Named volume lifecycle manager.
-	domainProxy      *DomainProxy // Domain proxy for subdomain routing.
+	lockManager      *lock.Manager  // Distributed file lock manager.
+	domainProxy      *DomainProxy // Domain proxy for domain routing.
 	registryStore    *registry.Store // OCI registry blob/manifest store.
 	raftStatusFn     RaftStatusFn    // Optional: returns Raft cluster status for debug endpoint.
 	dnsToggler       DNSToggler      // Optional: toggles the embedded DNS server at runtime.
@@ -51,8 +53,9 @@ type ServerOpts struct {
 	CACertPath     string                  // Path to CA certificate for /ca.crt endpoint.
 	Retention      config.RetentionConfig  // Retention configuration.
 	ObjStore       objstore.ObjectStore    // Object store (exposed to workers/HA nodes).
+	DataDir        string                  // Data directory for volume storage.
 	ServiceManager *service.Manager        // Service manager (optional).
-	DomainProxy    *DomainProxy            // Domain proxy for subdomain-based routing (optional).
+	DomainProxy    *DomainProxy            // Domain proxy for domain-based routing (optional).
 }
 
 // NewServer creates a new API server.
@@ -70,7 +73,7 @@ func NewServer(sm *session.Manager, reg *worker.Registry, provReg *provider.Regi
 	// Create volume manager if object store is available.
 	var volMgr *volume.Manager
 	if o.ObjStore != nil {
-		volMgr = volume.NewManager(s, o.ObjStore, logger)
+		volMgr = volume.NewManager(s, o.ObjStore, o.DataDir, logger)
 	}
 
 	srv := &Server{
@@ -78,6 +81,7 @@ func NewServer(sm *session.Manager, reg *worker.Registry, provReg *provider.Regi
 		sessionManager:   sm,
 		serviceManager:   o.ServiceManager,
 		volumeManager:    volMgr,
+		lockManager:      lock.NewManager(),
 		workerRegistry:   reg,
 		providerRegistry: provReg,
 		imageManager:     imgMgr,
@@ -212,7 +216,7 @@ func (s *Server) routes() {
 		r.Put("/services/{id}/env", s.updateServiceEnv)
 		r.Get("/services/{id}/logs", s.getServiceLogs)
 		r.Post("/services/{id}/routes", s.addServiceRoute)
-		r.Delete("/services/{id}/routes/{subdomain}", s.removeServiceRoute)
+		r.Delete("/services/{id}/routes/{domain}", s.removeServiceRoute)
 		r.Get("/services/{id}/routes", s.listServiceRoutes)
 
 		// Object store — public API.
@@ -252,6 +256,11 @@ func (s *Server) routes() {
 		r.Get("/volumes", s.listVolumes)
 		r.Get("/volumes/{name}", s.getVolume)
 		r.Delete("/volumes/{name}", s.deleteVolume)
+
+		// Volume locks
+		r.Post("/volumes/{name}/lock", s.acquireVolumeLock)
+		r.Delete("/volumes/{name}/lock", s.releaseVolumeLock)
+		r.Get("/volumes/{name}/locks", s.listVolumeLocks)
 
 		// Image Registry Management
 		s.registerRegistryRoutes(r)

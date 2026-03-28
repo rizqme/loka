@@ -21,6 +21,7 @@ import (
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/objstore"
 	"github.com/vyprai/loka/internal/worker/vm"
+	"github.com/vyprai/loka/internal/worker/volsync"
 	"github.com/vyprai/loka/pkg/lokavm"
 	"github.com/vyprai/loka/pkg/lokavm/gitcache"
 )
@@ -43,7 +44,7 @@ type Agent struct {
 	hypervisor    lokavm.Hypervisor
 	objStore      objstore.ObjectStore
 	gitCache      *gitcache.Cache
-	nfsAddr       string // NFS store server address (e.g. "127.0.0.1:2049")
+	syncAgent     *volsync.Agent
 
 	// Warm boot cache: image ref → snapshot for instant VM restore.
 	warmMu    sync.RWMutex
@@ -122,6 +123,7 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 		hypervisor:    hypervisor,
 		objStore:      objStore,
 		gitCache:      gc,
+		syncAgent:     volsync.NewAgent(dataDir, objStore, logger),
 		warmCache:     make(map[string]*warmSnapshot),
 	}, nil
 }
@@ -156,8 +158,6 @@ func (a *Agent) Provider() string { return a.provider }
 // Labels returns the agent's labels.
 func (a *Agent) Labels() map[string]string { return a.labels }
 
-// SetNFSAddr sets the NFS store server address for resolving store mounts.
-func (a *Agent) SetNFSAddr(addr string) { a.nfsAddr = addr }
 
 // LaunchOpts holds options for launching a session.
 type LaunchOpts struct {
@@ -263,7 +263,7 @@ func (a *Agent) LaunchSession(ctx context.Context, sessionID string, opts Launch
 		if err := a.resolveGitMount(context.Background(), &opts.Mounts[i]); err != nil {
 			return fmt.Errorf("resolve mount %d (%s): %w", i, opts.Mounts[i].Provider, err)
 		}
-		if err := a.resolveStoreMount(&opts.Mounts[i]); err != nil {
+		if err := a.resolveVolumeMount(&opts.Mounts[i]); err != nil {
 			return fmt.Errorf("resolve mount %d (%s): %w", i, opts.Mounts[i].Provider, err)
 		}
 	}
@@ -405,72 +405,50 @@ func (a *Agent) resolveGitMount(ctx context.Context, mount *loka.Volume) error {
 	return nil
 }
 
-// resolveStoreMount resolves a provider="store" mount by NFS-mounting the
-// control plane's store directory to a local path, then setting HostPath.
-// For the local worker (same process as control plane), we skip NFS and
-// use the store directory directly.
-func (a *Agent) resolveStoreMount(mount *loka.Volume) error {
-	if mount.Provider != "store" {
+// resolveVolumeMount resolves a provider="volume" or "store" mount by creating
+// or locating a local directory on the worker. Volumes are local-first: files
+// live on the worker's disk and are shared with VMs via virtiofs for fast access.
+// Cross-worker sync happens via the objstore in the background.
+func (a *Agent) resolveVolumeMount(mount *loka.Volume) error {
+	if mount.Provider != "store" && mount.Provider != "volume" && mount.Provider != "bundle" {
 		return nil
 	}
 	if mount.Name == "" {
-		return fmt.Errorf("name is required for provider=store")
+		return fmt.Errorf("name is required for volume mount")
 	}
 
-	// For local worker: the store directory is on the same machine.
-	// Use it directly without NFS mount.
-	storeDir := filepath.Join(a.dataDir, "..", "stores", mount.Name)
-	if abs, err := filepath.Abs(storeDir); err == nil {
-		storeDir = abs
+	// Bundles are readonly — stored in {dataDir}/../bundles/{name}/.
+	// Volumes are readwrite — stored in {dataDir}/../volumes/{name}/.
+	var volDir string
+	if mount.Provider == "bundle" {
+		volDir = filepath.Join(a.dataDir, "..", "bundles", mount.Name)
+	} else {
+		volDir = filepath.Join(a.dataDir, "..", "volumes", mount.Name)
+	}
+	if abs, err := filepath.Abs(volDir); err == nil {
+		volDir = abs
+	}
+	if err := os.MkdirAll(volDir, 0o755); err != nil {
+		return fmt.Errorf("create volume directory: %w", err)
 	}
 
-	// If the store dir exists locally (local worker), use it directly.
-	if info, err := os.Stat(storeDir); err == nil && info.IsDir() {
-		mount.HostPath = storeDir
-		a.logger.Info("resolved store mount (local)", "store", mount.Name, "path", storeDir)
-		return nil
+	// Pull latest from objstore if volume has remote data.
+	if a.syncAgent != nil {
+		a.syncAgent.SyncFromRemote(mount.Name)
 	}
 
-	// Remote worker: NFS mount from control plane.
-	if a.nfsAddr == "" {
-		return fmt.Errorf("store mount requires NFS server address (not configured)")
+	mount.HostPath = volDir
+
+	// Start watching for changes (syncs writes to objstore).
+	if a.syncAgent != nil {
+		a.syncAgent.WatchVolume(mount.Name)
 	}
 
-	mountPoint := filepath.Join(a.dataDir, "nfs", mount.Name)
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
-		return fmt.Errorf("create NFS mount point: %w", err)
-	}
-
-	// Check if already mounted.
-	if !isMounted(mountPoint) {
-		nfsSrc := fmt.Sprintf("%s:/%s", a.nfsAddr, mount.Name)
-		cmd := exec.Command("mount", "-t", "nfs", "-o", "vers=3,nolock,soft,timeo=50", nfsSrc, mountPoint)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			return fmt.Errorf("NFS mount %s: %s: %w", nfsSrc, string(out), err)
-		}
-	}
-
-	mount.HostPath = mountPoint
-	a.logger.Info("resolved store mount (NFS)", "store", mount.Name, "addr", a.nfsAddr, "path", mountPoint)
+	a.logger.Info("resolved volume mount", "volume", mount.Name, "path", volDir)
 	return nil
 }
 
 // isMounted checks if a path is a mount point by comparing device IDs.
-func isMounted(path string) bool {
-	// Simple check: if the path has files/dirs, it's likely mounted.
-	// A proper check would compare stat.Dev of path vs parent.
-	entries, err := os.ReadDir(path)
-	if err != nil {
-		return false
-	}
-	// If directory has a .nfs-mounted marker, it's from us.
-	for _, e := range entries {
-		if e.Name() == ".nfs-mounted" {
-			return true
-		}
-	}
-	return false
-}
 
 // WorkspacePath returns the workspace path for a session.
 func (a *Agent) WorkspacePath(sessionID string) string {
@@ -483,7 +461,7 @@ func (a *Agent) StopSession(sessionID string) error {
 	sess, ok := a.sessions[sessionID]
 	if !ok {
 		a.mu.Unlock()
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 	// Close port forward listener if active.
 	if sess.PortForwardListener != nil {
@@ -505,7 +483,7 @@ func (a *Agent) SetMode(sessionID string, mode loka.ExecMode) error {
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	if err := sess.Vsock.SetMode(mode); err != nil {
@@ -530,7 +508,7 @@ func (a *Agent) ExecCommands(ctx context.Context, sessionID, execID string, comm
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return &ExecResult{ExecID: execID, Status: loka.ExecStatusFailed, Error: fmt.Sprintf("session %s not found", sessionID)}
+		return &ExecResult{ExecID: execID, Status: loka.ExecStatusFailed, Error: fmt.Sprintf("instance %s not found", sessionID)}
 	}
 
 	resp, err := sess.Vsock.Execute(vm.ExecRequest{Commands: commands, Parallel: parallel, ExecID: execID})
@@ -556,7 +534,7 @@ func (a *Agent) ApproveOnGate(sessionID, commandID string, addToWhitelist bool) 
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 	return sess.Vsock.ApproveCommand(commandID, addToWhitelist)
 }
@@ -567,7 +545,7 @@ func (a *Agent) DenyOnGate(sessionID, commandID, reason string) error {
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 	return sess.Vsock.DenyCommand(commandID, reason)
 }
@@ -578,7 +556,7 @@ func (a *Agent) AddToWhitelist(sessionID, command string) error {
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 	// Make a copy to avoid concurrent slice write races.
 	newAllowed := make([]string, len(sess.Policy.AllowedCommands), len(sess.Policy.AllowedCommands)+1)
@@ -627,7 +605,7 @@ func (a *Agent) CreateCheckpoint(ctx context.Context, sessionID, checkpointID st
 		return &CheckpointResult{
 			CheckpointID: checkpointID,
 			SessionID:    sessionID,
-			Error:        fmt.Sprintf("session %s not found", sessionID),
+			Error:        fmt.Sprintf("instance %s not found", sessionID),
 		}
 	}
 
@@ -649,7 +627,7 @@ func (a *Agent) RestoreCheckpoint(ctx context.Context, sessionID, checkpointID, 
 	_, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	return a.checkpointMgr.Restore(ctx, sessionID, checkpointID, overlayKey)
@@ -661,7 +639,7 @@ func (a *Agent) DiffCheckpoints(sessionID, cpIDA, cpIDB string) ([]vm.DiffEntry,
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
+		return nil, fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	layerA, okA := sess.LayerMap[cpIDA]
@@ -706,9 +684,12 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 	}
 
 	rootfs := opts.RootfsPath
+	isLayered := strings.Contains(rootfs, ":")
 	rootfsIsDir := false
-	if info, err := os.Stat(rootfs); err == nil && info.IsDir() {
-		rootfsIsDir = true
+	if !isLayered {
+		if info, err := os.Stat(rootfs); err == nil && info.IsDir() {
+			rootfsIsDir = true
+		}
 	}
 
 	vmCfg := lokavm.VMConfig{
@@ -720,7 +701,17 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		Vsock:       true,
 	}
 
-	if rootfsIsDir {
+	if isLayered {
+		// Docker-style layered rootfs: each layer is a virtiofs mount (read-only).
+		layers := strings.Split(rootfs, ":")
+		for i, layerPath := range layers {
+			tag := fmt.Sprintf("layer-%d", i)
+			vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
+				Tag: tag, HostPath: layerPath, GuestPath: "/", ReadOnly: true,
+			})
+		}
+		vmCfg.BootArgs = fmt.Sprintf("console=hvc0 loka.nlayers=%d", len(layers))
+	} else if rootfsIsDir {
 		vmCfg.BootArgs = "console=hvc0 rootfstype=virtiofs root=rootfs rw init=/usr/local/bin/loka-supervisor"
 		vmCfg.SharedDirs = append(vmCfg.SharedDirs, lokavm.SharedDir{
 			Tag: "rootfs", HostPath: rootfs, GuestPath: "/", ReadOnly: false,
@@ -732,6 +723,13 @@ func (a *Agent) LaunchService(ctx context.Context, serviceID string, opts Servic
 		})
 	} else {
 		vmCfg.BootArgs = "console=hvc0"
+	}
+
+	// Resolve provider-specific mounts to local HostPath directories.
+	for i := range opts.Mounts {
+		if err := a.resolveVolumeMount(&opts.Mounts[i]); err != nil {
+			return fmt.Errorf("resolve mount %d (%s): %w", i, opts.Mounts[i].Provider, err)
+		}
 	}
 
 	for i, mount := range opts.Mounts {
@@ -1017,7 +1015,7 @@ func (a *Agent) StartService(ctx context.Context, sessionID string, command stri
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	pid, err := sess.Vsock.ServiceStart(command, args, env, workdir, restartPolicy)
@@ -1040,7 +1038,7 @@ func (a *Agent) StopService(sessionID string) error {
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("session %s not found", sessionID)
+		return fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	// Close port forward listener before stopping the service.
@@ -1060,7 +1058,7 @@ func (a *Agent) ServiceStatus(sessionID string) (*vm.ServiceStatusResult, error)
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
+		return nil, fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	return sess.Vsock.ServiceStatus()
@@ -1072,7 +1070,7 @@ func (a *Agent) ServiceLogs(sessionID string, lines int) (*vm.ServiceLogsResult,
 	sess, ok := a.sessions[sessionID]
 	a.mu.RUnlock()
 	if !ok {
-		return nil, fmt.Errorf("session %s not found", sessionID)
+		return nil, fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	return sess.Vsock.ServiceLogs(lines)
@@ -1088,7 +1086,7 @@ func (a *Agent) StartPortForward(sessionID string, vmPort int) (int, error) {
 	sess, ok := a.sessions[sessionID]
 	a.mu.Unlock()
 	if !ok {
-		return 0, fmt.Errorf("session %s not found", sessionID)
+		return 0, fmt.Errorf("instance %s not found", sessionID)
 	}
 
 	// Listen on a random available port.
@@ -1129,27 +1127,39 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 	defer clientConn.Close()
 
 	// Open a new vsock connection to the supervisor.
-	vsockConn, err := net.DialTimeout("unix", sess.Vsock.SocketPath(), 5*time.Second)
-	if err != nil {
-		a.logger.Debug("port forward: vsock dial failed", "error", err)
-		return
+	// Use the VM's DialVsock for lokavm (direct vsock), fall back to UDS for Firecracker.
+	var vsockConn net.Conn
+	if sess.VM != nil && sess.VM.DialVsock != nil {
+		var err error
+		vsockConn, err = sess.VM.DialVsock(52)
+		if err != nil {
+			a.logger.Debug("port forward: vsock dial failed", "error", err)
+			return
+		}
+	} else {
+		var err error
+		vsockConn, err = net.DialTimeout("unix", sess.Vsock.SocketPath(), 5*time.Second)
+		if err != nil {
+			a.logger.Debug("port forward: vsock dial failed (UDS)", "error", err)
+			return
+		}
+		// Firecracker UDS needs CONNECT handshake.
+		if _, err := fmt.Fprintf(vsockConn, "CONNECT 52\n"); err != nil {
+			vsockConn.Close()
+			a.logger.Debug("port forward: vsock CONNECT failed", "error", err)
+			return
+		}
+		buf := make([]byte, 32)
+		n, err := vsockConn.Read(buf)
+		if err != nil || !strings.HasPrefix(string(buf[:n]), "OK") {
+			vsockConn.Close()
+			a.logger.Debug("port forward: vsock handshake failed")
+			return
+		}
 	}
 	defer vsockConn.Close()
 
-	// Use a bufio.Reader for the protocol handshake so we can read exact
-	// lines without consuming bytes that belong to the raw TCP tunnel.
 	br := bufio.NewReader(vsockConn)
-
-	// lokavm vsock handshake: CONNECT to port 52 (supervisor).
-	if _, err := fmt.Fprintf(vsockConn, "CONNECT 52\n"); err != nil {
-		a.logger.Debug("port forward: vsock CONNECT failed", "error", err)
-		return
-	}
-	okLine, err := br.ReadString('\n')
-	if err != nil || !strings.HasPrefix(okLine, "OK") {
-		a.logger.Debug("port forward: vsock handshake failed")
-		return
-	}
 
 	// Send tcp_forward RPC. After the response, the connection becomes raw TCP.
 	req := vm.RPCRequest{
@@ -1178,6 +1188,7 @@ func (a *Agent) forwardConnection(clientConn net.Conn, sess *SessionState, vmPor
 		a.logger.Debug("port forward: supervisor error", "error", resp.Error.Message)
 		return
 	}
+	a.logger.Info("port forward: tunnel established", "port", vmPort)
 
 	// Drain any data the bufio.Reader may have buffered past the response
 	// line (e.g. the first bytes of the TCP stream from the VM service).
@@ -1235,6 +1246,122 @@ func (a *Agent) GetForwardedPort(sessionID string) int {
 		return 0
 	}
 	return sess.ForwardedPort
+}
+
+// StartShell opens an interactive PTY shell in a session's VM.
+// It dials a raw vsock connection to the supervisor, sends a shell_start RPC,
+// and bridges the framed PTY I/O to the relay channels until the shell exits.
+func (a *Agent) StartShell(sessionID, command string, rows, cols uint16, workdir string, env map[string]string, inputCh <-chan vm.ShellFrame, outputCh chan<- vm.ShellFrame, errCh chan<- error) {
+	a.mu.RLock()
+	sess, ok := a.sessions[sessionID]
+	a.mu.RUnlock()
+	if !ok {
+		errCh <- fmt.Errorf("instance %s not found", sessionID)
+		return
+	}
+
+	if sess.VM == nil || sess.VM.DialVsock == nil {
+		errCh <- fmt.Errorf("session %s has no vsock dialer", sessionID)
+		return
+	}
+
+	// Open a dedicated vsock connection (not the pooled one — shell is long-lived).
+	conn, err := sess.VM.DialVsock(52)
+	if err != nil {
+		errCh <- fmt.Errorf("vsock dial: %w", err)
+		return
+	}
+	defer conn.Close()
+
+	// Send shell_start RPC.
+	params, _ := json.Marshal(map[string]interface{}{
+		"command": command,
+		"rows":    rows,
+		"cols":    cols,
+		"workdir": workdir,
+		"env":     env,
+	})
+	req := vm.RPCRequest{
+		Method: "shell_start",
+		ID:     "shell",
+		Params: params,
+	}
+	if err := json.NewEncoder(conn).Encode(req); err != nil {
+		errCh <- fmt.Errorf("send shell_start: %w", err)
+		return
+	}
+
+	// Read the RPC response.
+	br := bufio.NewReader(conn)
+	respLine, err := br.ReadString('\n')
+	if err != nil {
+		errCh <- fmt.Errorf("read shell_start response: %w", err)
+		return
+	}
+	var resp vm.RPCResponse
+	if err := json.Unmarshal([]byte(respLine), &resp); err != nil {
+		errCh <- fmt.Errorf("parse shell_start response: %w", err)
+		return
+	}
+	if resp.Error != nil {
+		errCh <- fmt.Errorf("supervisor: %s", resp.Error.Message)
+		return
+	}
+
+	// Drain any buffered data from the bufio.Reader before switching to raw I/O.
+	if br.Buffered() > 0 {
+		buffered := make([]byte, br.Buffered())
+		n, _ := br.Read(buffered)
+		if n > 0 {
+			// These are the first bytes of framed output — parse and forward them.
+			// For simplicity, send as raw data; the frame reader will handle alignment
+			// on subsequent reads via the raw conn.
+			outputCh <- vm.ShellFrame{Type: vm.FrameData, Data: buffered[:n]}
+		}
+	}
+
+	// Signal success.
+	errCh <- nil
+
+	a.logger.Info("shell connected", "session", sessionID, "command", command)
+
+	// Bridge relay channels ↔ framed vsock I/O.
+	var wg sync.WaitGroup
+
+	// Goroutine 1: vsock → outputCh (PTY output and exit).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			frame, err := vm.ReadFrame(conn)
+			if err != nil {
+				return
+			}
+			select {
+			case outputCh <- frame:
+			default:
+				return
+			}
+			if frame.Type == vm.FrameExit {
+				return
+			}
+		}
+	}()
+
+	// Goroutine 2: inputCh → vsock (stdin data and resize).
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for frame := range inputCh {
+			if err := vm.WriteFrame(conn, frame); err != nil {
+				return
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(outputCh)
+	a.logger.Info("shell disconnected", "session", sessionID)
 }
 
 // SessionCount returns the number of active sessions.

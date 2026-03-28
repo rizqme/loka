@@ -47,13 +47,20 @@ func newServiceListCmd() *cobra.Command {
 			client := newClient()
 			var resp struct {
 				Services []struct {
-					ID        string    `json:"ID"`
-					Name      string    `json:"Name"`
-					Status    string    `json:"Status"`
-					Port      int       `json:"Port"`
-					ImageRef  string    `json:"ImageRef"`
-					Ready     bool      `json:"Ready"`
-					CreatedAt time.Time `json:"CreatedAt"`
+					ID         string    `json:"ID"`
+					Name       string    `json:"Name"`
+					Status     string    `json:"Status"`
+					Port       int       `json:"Port"`
+					ImageRef   string    `json:"ImageRef"`
+					Ready      bool      `json:"Ready"`
+					CreatedAt  time.Time `json:"CreatedAt"`
+					Components []struct {
+						Name   string `json:"name"`
+						Image  string `json:"image"`
+						Port   int    `json:"port"`
+						Domain string `json:"domain"`
+						Status string `json:"status"`
+					} `json:"Components,omitempty"`
 				} `json:"services"`
 				Total int `json:"total"`
 			}
@@ -68,15 +75,35 @@ func newServiceListCmd() *cobra.Command {
 				return nil
 			}
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tSTATUS\tPORT\tIMAGE\tCREATED")
+			fmt.Fprintln(w, "SERVICE\tCOMPONENT\tSTATUS\tIMAGE\tPORT\tDOMAIN")
 			for _, s := range resp.Services {
 				status := s.Status
 				if s.Ready {
 					status = status + " (ready)"
 				}
-				fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
-					shortID(s.ID), s.Name, status, s.Port,
-					truncate(s.ImageRef, 30), s.CreatedAt.Format("2006-01-02 15:04"))
+				if len(s.Components) > 0 {
+					// Multi-component service.
+					for i, c := range s.Components {
+						svcName := s.Name
+						if i > 0 {
+							svcName = ""
+						}
+						domain := c.Domain
+						if domain == "" {
+							domain = "(internal)"
+						}
+						cStatus := c.Status
+						if cStatus == "" {
+							cStatus = status
+						}
+						fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
+							svcName, c.Name, cStatus, truncate(c.Image, 25), c.Port, domain)
+					}
+				} else {
+					// Single-component service.
+					fmt.Fprintf(w, "%s\t-\t%s\t%s\t%d\t%s\n",
+						s.Name, status, truncate(s.ImageRef, 25), s.Port, s.CreatedAt.Format("2006-01-02 15:04"))
+				}
 			}
 			w.Flush()
 			return nil
@@ -221,11 +248,13 @@ func newServiceStopCmd() *cobra.Command {
 func newServiceDestroyCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:     "destroy <id>",
-		Short:   "Destroy a service",
+		Short:   "Stop and destroy a service",
 		Aliases: []string{"rm", "delete"},
 		Args:    cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			client := newClient()
+			// Stop first (ignore errors — may already be stopped).
+			client.Raw(cmd.Context(), "POST", "/api/v1/services/"+args[0]+"/stop", nil, nil)
 			if err := client.Raw(cmd.Context(), "DELETE", "/api/v1/services/"+args[0], nil, nil); err != nil {
 				return err
 			}

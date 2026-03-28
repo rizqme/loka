@@ -259,6 +259,14 @@ func (c *VsockClient) MountVolume(req MountVolumeRequest) error {
 	return err
 }
 
+// WriteHostsEntries sends a write_hosts RPC to inject /etc/hosts entries inside the VM.
+// Used for inter-component service discovery within multi-component services.
+func (c *VsockClient) WriteHostsEntries(entries map[string]string) error {
+	params, _ := json.Marshal(map[string]any{"entries": entries})
+	_, err := c.call("write_hosts", params)
+	return err
+}
+
 // FsStatRequest is the params for "fs_stat" host-side RPC.
 type FsStatRequest struct {
 	Bucket string `json:"bucket"`

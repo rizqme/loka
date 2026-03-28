@@ -3,6 +3,7 @@ package api
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -232,7 +233,7 @@ func (s *Server) getServiceLogs(w http.ResponseWriter, r *http.Request) {
 // --- Service Routes ---
 
 type addRouteReq struct {
-	Subdomain    string `json:"subdomain,omitempty"`
+	Domain       string `json:"domain,omitempty"`
 	CustomDomain string `json:"custom_domain,omitempty"`
 	Port         int    `json:"port"`
 	Protocol     string `json:"protocol,omitempty"`
@@ -249,9 +250,13 @@ func (s *Server) addServiceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.Subdomain == "" && req.CustomDomain == "" {
-		writeError(w, http.StatusBadRequest, "subdomain or custom_domain is required")
+	if req.Domain == "" && req.CustomDomain == "" {
+		writeError(w, http.StatusBadRequest, "domain or custom_domain is required")
 		return
+	}
+	// Auto-append .loka TLD for bare names (no dot).
+	if req.Domain != "" && !strings.Contains(req.Domain, ".") {
+		req.Domain = req.Domain + ".loka"
 	}
 
 	svc, err := s.serviceManager.Get(r.Context(), id)
@@ -261,7 +266,7 @@ func (s *Server) addServiceRoute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	route := loka.ServiceRoute{
-		Subdomain:    req.Subdomain,
+		Domain:       req.Domain,
 		CustomDomain: req.CustomDomain,
 		Port:         req.Port,
 		Protocol:     req.Protocol,
@@ -277,10 +282,10 @@ func (s *Server) addServiceRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Register with domain proxy if service is running and has a subdomain.
-	if s.domainProxy != nil && route.Subdomain != "" && (svc.Status == loka.ServiceStatusRunning || svc.Status == loka.ServiceStatusIdle) {
+	// Register with domain proxy if service is running and has a domain.
+	if s.domainProxy != nil && route.Domain != "" && (svc.Status == loka.ServiceStatusRunning || svc.Status == loka.ServiceStatusIdle) {
 		s.domainProxy.AddRoute(&loka.DomainRoute{
-			Subdomain:  route.Subdomain,
+			Domain:     route.Domain,
 			ServiceID:  svc.ID,
 			RemotePort: route.Port,
 			Type:       loka.DomainRouteService,
@@ -296,7 +301,7 @@ func (s *Server) removeServiceRoute(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
-	subdomain := chi.URLParam(r, "subdomain")
+	domain := chi.URLParam(r, "domain")
 
 	svc, err := s.serviceManager.Get(r.Context(), id)
 	if err != nil {
@@ -307,7 +312,7 @@ func (s *Server) removeServiceRoute(w http.ResponseWriter, r *http.Request) {
 	found := false
 	filtered := make([]loka.ServiceRoute, 0, len(svc.Routes))
 	for _, rt := range svc.Routes {
-		if rt.Subdomain == subdomain {
+		if rt.Domain == domain {
 			found = true
 			continue
 		}
@@ -327,7 +332,7 @@ func (s *Server) removeServiceRoute(w http.ResponseWriter, r *http.Request) {
 
 	// Remove from domain proxy.
 	if s.domainProxy != nil {
-		s.domainProxy.RemoveRoute(subdomain)
+		s.domainProxy.RemoveRoute(domain)
 	}
 
 	writeJSON(w, http.StatusOK, svc)

@@ -1,14 +1,13 @@
 ---
 title: Introduction
-description: Controlled execution environment for AI agents
+description: Deploy apps and run code in microVMs with policy control
 ---
-
 
 ## Overview
 
-LOKA runs agent-generated code inside Firecracker microVMs. Each session is an isolated Linux environment where a supervisor enforces access control at the OS level — which binaries can execute, which network endpoints are reachable, and which files can be read or written.
+LOKA deploys applications and runs agent-generated code inside microVMs. On macOS, VMs use the Apple Virtualization Framework. On Linux, they use Cloud Hypervisor with KVM. Each session is an isolated Linux environment where a supervisor enforces access control at the OS level -- which binaries can execute, which network endpoints are reachable, and which files can be read or written.
 
-Sessions start from Docker images and boot in ~28ms from a warm snapshot. The agent can checkpoint state, branch execution, and roll back to any prior point.
+LOKA supports deploying source projects, Docker images, and Docker Compose applications as managed services with automatic domains, DNS, and volume persistence. Sessions start from Docker images and boot in milliseconds from a warm snapshot. The agent can checkpoint state, branch execution, and roll back to any prior point.
 
 ## Install
 
@@ -16,50 +15,35 @@ Sessions start from Docker images and boot in ~28ms from a warm snapshot. The ag
 curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 ```
 
+No sudo required. Installs to `~/.loka/bin`.
 
-
-```bash
-pip install loka-sdk
-```
-
-```python
-from loka import LokaClient
-
-client = LokaClient()
-session = client.create_session(image="python:3.12-slim", mode="execute")
-
-for event in client.stream(session.ID, "python3", ["-c", "print('hello')"]):
-    if event.is_output:
-        print(event.text, end="")
-    if event.is_done:
-        break
-
-client.destroy_session(session.ID)
-```
-
+## Quick Start
 
 ```bash
-npm install @vypr-ai/loka-sdk
+loka setup local                              # Start local control plane + worker
+loka deploy nginx:latest --name my-app        # Deploy an app from a Docker image
+loka dns enable                               # Enable .loka local DNS
+# Access at: http://my-app.loka
+loka space down                               # Stop everything
 ```
 
-```typescript
-import { LokaClient } from '@vypr-ai/loka-sdk';
+## What LOKA Provides
 
-const loka = new LokaClient();
-const session = await loka.createSession({ image: 'python:3.12-slim', mode: 'execute' });
-
-for await (const event of loka.stream(session.ID, { command: 'python3', args: ['-c', "print('hello')"] })) {
-  if (event.event === 'output') process.stdout.write(event.data.text);
-  if (event.event === 'done') break;
-}
-
-await loka.destroySession(session.ID);
-```
-
+| Feature | Description |
+|---------|-------------|
+| **App Deployment** | Deploy from source, Docker images, or Docker Compose files |
+| **Sessions** | Isolated microVMs for running agent code with policy control |
+| **Domains & DNS** | Automatic `.loka` domains for services with built-in DNS server |
+| **Multi-component** | Deploy apps with multiple services defined in `loka.yaml` |
+| **Volumes** | Persistent storage with cross-worker sync |
+| **Access Control** | Command, network, and filesystem policies enforced at the OS level |
+| **Shell** | Full PTY shell into any session or service instance |
+| **Checkpoints** | Snapshot, branch, and restore VM state |
+| **SDKs** | Python and TypeScript SDKs for programmatic access |
 
 ## Access Control
 
-Sessions have an exec policy that governs what the agent is allowed to do. Commands not in the whitelist are suspended at an approval gate — the calling system decides whether to allow or deny them.
+Sessions have an exec policy that governs what the agent is allowed to do. Commands not in the whitelist are suspended at an approval gate -- the calling system decides whether to allow or deny them.
 
 ```python
 session = client.create_session(
@@ -84,25 +68,54 @@ Network and filesystem access are also policy-controlled:
 | Filesystem | Per-path read/write/execute | `allow /workspace/**`, `deny .env` |
 | Modes | Overall session posture | `explore` (RO), `execute` (RW), `ask` (approval) |
 
-
-
-
-
-## Quickstart
-
-
-
-
-
 ## Architecture
 
 ```
-Agent → SDK → Control Plane → Worker → Firecracker VM → Supervisor → Process
-                                              │
-                                    Command proxy (binary gate)
-                                    Network filter (iptables)
-                                    Filesystem guard (landlock)
-                                    Seccomp (syscall filter)
+Agent --> SDK --> Control Plane --> Worker --> MicroVM --> Supervisor --> Process
+                                      |
+                            Command proxy (binary gate)
+                            Network filter (iptables)
+                            Filesystem guard (landlock)
+                            Seccomp (syscall filter)
 ```
 
-The control plane manages sessions and schedules them onto workers. Each worker runs Firecracker VMs. Inside each VM, a supervisor process enforces all policies at the kernel level — not by inspecting code, but by controlling what the process can access.
+The control plane manages sessions and services, scheduling them onto workers. Each worker runs microVMs using the Apple Virtualization Framework (macOS) or Cloud Hypervisor (Linux). Inside each VM, a supervisor process enforces all policies at the kernel level -- not by inspecting code, but by controlling what the process can access. A built-in domain proxy routes traffic to services, and a DNS server provides `.loka` domain resolution.
+
+## SDKs
+
+```bash
+pip install loka-sdk
+```
+
+```python
+from loka import LokaClient
+
+client = LokaClient()
+session = client.create_session(image="python:3.12-slim", mode="execute")
+
+for event in client.stream(session.ID, "python3", ["-c", "print('hello')"]):
+    if event.is_output:
+        print(event.text, end="")
+    if event.is_done:
+        break
+
+client.destroy_session(session.ID)
+```
+
+```bash
+npm install @vypr-ai/loka-sdk
+```
+
+```typescript
+import { LokaClient } from '@vypr-ai/loka-sdk';
+
+const loka = new LokaClient();
+const session = await loka.createSession({ image: 'python:3.12-slim', mode: 'execute' });
+
+for await (const event of loka.stream(session.ID, { command: 'python3', args: ['-c', "print('hello')"] })) {
+  if (event.event === 'output') process.stdout.write(event.data.text);
+  if (event.event === 'done') break;
+}
+
+await loka.destroySession(session.ID);
+```

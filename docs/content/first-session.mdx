@@ -5,35 +5,71 @@ description: Create a VM, run commands, destroy it
 
 # Your First Session
 
-Create a Loka session, run a command inside a microVM, and tear it down.
+Set up LOKA, create a session in a microVM, run commands, and tear it down.
 
 ## Prerequisites
 
-You need a running Loka control plane. See [Installation](/installation.md) if you haven't set one up yet.
+```bash
+# Install LOKA
+curl -fsSL https://vyprai.github.io/loka/install.sh | bash
 
+# Start the local control plane + worker
+loka setup local
+```
 
+See [Installation](/installation) if you need more details.
+
+## Using the CLI
+
+### 1. Create a session
+
+```bash
+loka session create --image python:3.12-slim
+# Output: ses_3f8a...
+```
+
+### 2. Run a command
+
+```bash
+loka exec <id> -- echo "hello"
+# hello
+```
+
+### 3. Open a shell
+
+```bash
+loka shell <id>
+# Full interactive PTY with tab completion, arrow keys, etc.
+```
+
+### 4. Run Python inside the VM
+
+```bash
+loka exec <id> -- python3 -c "print(42)"
+# 42
+```
+
+### 5. Destroy the session
+
+```bash
+loka session destroy <id>
+```
+
+## Using the SDK
 
 ### 1. Install the SDK
 
-
-
 ```bash
-pip install loka
+pip install loka-sdk
 ```
-
 
 ```bash
 npm install @vypr-ai/loka-sdk
 ```
 
-
-
-
 ### 2. Create a session
 
 Start a microVM from the `python:3.12-slim` Docker image.
-
-
 
 ```python
 from loka import LokaClient
@@ -43,7 +79,6 @@ session = client.create_session(image="python:3.12-slim")
 print(session.id)  # ses_3f8a...
 ```
 
-
 ```typescript
 import { LokaClient } from '@vypr-ai/loka-sdk';
 
@@ -52,67 +87,47 @@ const session = await loka.createSession({ image: 'python:3.12-slim' });
 console.log(session.id); // ses_3f8a...
 ```
 
-
-
-
 ### 3. Run a shell command
-
-
 
 ```python
 result = client.run_and_wait(session.id, "echo hello")
 print(result.stdout)  # hello
 ```
 
-
 ```typescript
 const result = await loka.runCommand(session.id, 'echo hello');
 console.log(result.stdout); // hello
 ```
 
-
-
-
 ### 4. Run Python inside the VM
-
-
 
 ```python
 result = client.run_and_wait(session.id, "python3 -c 'print(42)'")
 print(result.stdout)  # 42
 ```
 
-
 ```typescript
 const result = await loka.runCommand(session.id, "python3 -c 'print(42)'");
 console.log(result.stdout); // 42
 ```
 
-
-
-
 ### 5. Destroy the session
 
 When you're done, destroy the session to free resources.
-
-
 
 ```python
 client.destroy_session(session.id)
 ```
 
-
 ```typescript
 await loka.destroySession(session.id);
 ```
 
-
-
-
-
 ## Next steps
 
-- **Port forwarding** -- expose a VM port on your machine with `--port 8080:5000` at creation or `loka session port-forward` on-demand. See [Sessions](/sessions) for details.
+- **Deploy an app** -- deploy a Docker image or source project with `loka deploy`. See [Deploying Applications](/deploy-apps).
+- **Shell** -- open a full interactive PTY with `loka shell`. See [Sessions](/sessions) for details.
+- **Port forwarding** -- expose a VM port on your machine with `--port 8080:5000` at creation or `loka session port-forward` on-demand.
 - **Local file mounting** -- mount a host directory into the VM with `loka session mount`.
 - **Storage mounts** -- attach S3/GCS buckets and sync data with `loka session sync`.
-
+- **Domains** -- expose services via `.loka` domains. See [Domains & DNS](/domains).

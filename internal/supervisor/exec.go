@@ -573,20 +573,40 @@ func (sp *ServiceProcess) startOnce() error {
 	sp.mu.Lock()
 	defer sp.mu.Unlock()
 
-	// Resolve binary path using the service PATH (Go's exec.LookPath
-	// uses the parent process's PATH, not Cmd.Env).
+	// Resolve binary path. Try PATH lookup first, then fall back to sh -c
+	// for proper symlink/shebang handling on overlay filesystems.
 	cmdPath := sp.command
 	if !filepath.IsAbs(cmdPath) {
-		servicePATH := "/env/bin:/usr/local/bin:/usr/bin:/bin"
+		servicePATH := "/env/bin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin"
+		found := false
 		for _, dir := range filepath.SplitList(servicePATH) {
 			candidate := filepath.Join(dir, cmdPath)
 			if _, err := os.Stat(candidate); err == nil {
 				cmdPath = candidate
+				found = true
 				break
 			}
 		}
+		if !found {
+			// Binary not found via stat — may be a symlink to a script on overlayfs.
+			// Use the original name and let sh resolve it via PATH.
+			cmdPath = sp.command
+		}
 	}
-	osCmd := exec.CommandContext(sp.ctx, cmdPath, sp.args...)
+	// Use sh -c to handle symlinks and shebangs (e.g., npm -> npm-cli.js with #!/usr/bin/env node).
+	// Direct exec fails on overlay filesystems where the shebang target is in a different layer.
+	var osCmd *exec.Cmd
+	if cmdPath == "sh" || cmdPath == "/bin/sh" || cmdPath == "bash" || cmdPath == "/bin/bash" {
+		// Already a shell — run directly to avoid double-wrapping.
+		osCmd = exec.CommandContext(sp.ctx, cmdPath, sp.args...)
+	} else {
+		// Wrap in sh -c for proper shebang/symlink resolution.
+		fullCmd := cmdPath
+		for _, a := range sp.args {
+			fullCmd += " '" + strings.ReplaceAll(a, "'", "'\\''") + "'"
+		}
+		osCmd = exec.CommandContext(sp.ctx, "/bin/sh", "-c", fullCmd)
+	}
 	if sp.workdir != "" {
 		osCmd.Dir = sp.workdir
 	}
@@ -595,7 +615,7 @@ func (sp *ServiceProcess) startOnce() error {
 	// we allow more env vars (NODE_OPTIONS, PYTHONPATH etc.) since the VM itself
 	// is the security boundary.
 	envSlice := []string{
-		"PATH=/env/bin:/usr/local/bin:/usr/bin:/bin",
+		"PATH=/env/bin:/usr/local/bin:/usr/bin:/usr/sbin:/bin:/sbin",
 		"HOME=/workspace",
 	}
 	for k, v := range sp.env {

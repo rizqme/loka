@@ -121,18 +121,17 @@ func main() {
 		SilenceErrors: true,
 	}
 
-	rootCmd.PersistentFlags().StringVarP(&serverAddr, "server", "s", "http://localhost:6840", "Control plane address")
+	rootCmd.PersistentFlags().StringVarP(&serverAddr, "space", "s", "http://localhost:6840", "LOKA space address")
 	rootCmd.PersistentFlags().StringVarP(&token, "token", "t", "", "Auth token")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format: table, json")
 
 	rootCmd.AddCommand(
 		newVersionCmd(),
-		newListCmd(),
-		newCurrentCmd(),
+		newSpaceCmd(),
 		newConnectCmd(),
 		newSetupCmd(),
 		newDeployCmd(),
-		newUseCmd(),
+		newInstanceCmd(),
 		newSessionCmd(),
 		newServiceCmd(),
 		newExecCmd(),
@@ -203,7 +202,7 @@ func newStatusCmd() *cobra.Command {
 			}
 
 			fmt.Printf("Control Plane:  %s\n", health.Status)
-			fmt.Printf("Server:         %s\n", serverAddr)
+			fmt.Printf("Space:          %s\n", serverAddr)
 			fmt.Printf("Workers:        %d ready / %d total\n", health.WorkersReady, health.WorkersTotal)
 
 			// Sessions.

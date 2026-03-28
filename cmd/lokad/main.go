@@ -36,7 +36,6 @@ import (
 	leaderobjstore "github.com/vyprai/loka/internal/objstore/leader"
 	localobjstore "github.com/vyprai/loka/internal/objstore/local"
 	s3objstore "github.com/vyprai/loka/internal/objstore/s3"
-	lokanfs "github.com/vyprai/loka/internal/controlplane/nfs"
 	lokadns "github.com/vyprai/loka/internal/dns"
 	"github.com/vyprai/loka/internal/provider"
 	"github.com/vyprai/loka/pkg/lokavm"
@@ -214,9 +213,9 @@ func main() {
 		caCertPath = cfg.TLS.CACertFile
 		logger.Info("TLS enabled (user-provided certs)", "cert", cfg.TLS.CertFile)
 	} else if autoTLS {
-		// If domain proxy is enabled with base domain "loka", add wildcard SAN
+		// If domain proxy is enabled with DNS domain "loka", add wildcard SAN
 		// so that *.loka and loka resolve with the auto-generated certificate.
-		if cfg.Domain.Enabled && cfg.Domain.BaseDomain == "loka" {
+		if cfg.Domain.Enabled && cfg.Domain.DNSDomain == "loka" {
 			hasLoka := false
 			for _, san := range cfg.TLS.SANs {
 				if san == "*.loka" || san == "loka" {
@@ -420,7 +419,7 @@ func main() {
 	sched := scheduler.New(registry, scheduler.Strategy(cfg.Scheduler.Strategy))
 
 	// Initialize volume manager.
-	volMgr := volume.NewManager(db, objStore, logger)
+	volMgr := volume.NewManager(db, objStore, cfg.DataDir, logger)
 
 	// Initialize session manager.
 	sm := session.NewManager(db, registry, sched, imgMgr, objStore, logger)
@@ -519,22 +518,7 @@ func main() {
 		localWorker.SetStore(db)
 		localWorker.Start(ctx)
 
-		// Start NFS store server for shared "store" volumes.
-		nfsAddr := "127.0.0.1:2049"
-		storesDir := filepath.Join(cfg.DataDir, "stores")
-		nfsSrv, err := lokanfs.NewStoreServer(storesDir, nfsAddr, logger)
-		if err != nil {
-			logger.Warn("NFS store server failed to initialize", "error", err)
-		} else {
-			go func() {
-				if err := nfsSrv.Start(ctx); err != nil {
-					logger.Warn("NFS store server error", "error", err)
-				}
-			}()
-		}
-
 		agent := localWorker.Agent()
-		agent.SetNFSAddr(nfsAddr)
 		imgMgr.SetHypervisor(agent.Hypervisor())
 
 		// Wire up service log retrieval through the embedded agent.
@@ -555,13 +539,42 @@ func main() {
 	var domainProxy *api.DomainProxy
 	if cfg.Domain.Enabled {
 		domainProxy = api.NewDomainProxy(
-			cfg.Domain.BaseDomain,
 			sm,
 			registry,
 			logger,
 			api.DomainProxyOpts{ServiceManager: svcMgr},
 		)
 		svcMgr.SetDomainProxy(domainProxy)
+
+		// When a domain route is added, regenerate the TLS cert to include it.
+		tlsDir := cfg.DataDir + "/tls"
+		domainProxy.SetCertRegenerator(func(domains []string) {
+			caCertPath := filepath.Join(tlsDir, "ca.crt")
+			caKeyPath := filepath.Join(tlsDir, "ca.key")
+			if _, err := os.Stat(caCertPath); err != nil {
+				return
+			}
+			// Delete existing cert so GenerateServerCert creates a new one with updated SANs.
+			os.Remove(filepath.Join(tlsDir, "server.crt"))
+			os.Remove(filepath.Join(tlsDir, "server.key"))
+			// Collect all domain SANs.
+			sans := append([]string{"*.loka", "loka"}, domains...)
+			certPath, keyPath, err := tlsutil.GenerateServerCert(caCertPath, caKeyPath, tlsDir, sans)
+			if err != nil {
+				logger.Warn("failed to regenerate TLS cert", "error", err)
+				return
+			}
+			// Reload the cert into the domain proxy's TLS config.
+			cert, err := crypto_tls.LoadX509KeyPair(certPath, keyPath)
+			if err != nil {
+				logger.Warn("failed to load regenerated cert", "error", err)
+				return
+			}
+			if serverTLSCfg != nil {
+				serverTLSCfg.Certificates = []crypto_tls.Certificate{cert}
+			}
+			logger.Info("TLS cert regenerated", "domains", len(domains))
+		})
 	}
 
 	// ── Initialize API server ───────────────────────────────
@@ -570,6 +583,7 @@ func main() {
 		Retention:      cfg.Retention,
 		CACertPath:     caCertPath,
 		ObjStore:       objStore,
+		DataDir:        cfg.DataDir,
 		ServiceManager: svcMgr,
 		DomainProxy:    domainProxy,
 	})
@@ -580,6 +594,9 @@ func main() {
 	}
 
 	// ── Start domain proxy listener ─────────────────────────
+	// The domain proxy listens on plain HTTP on :6843.
+	// For portless access, loka-proxy runs on 80 (HTTP) and 443 (TLS) as root,
+	// forwarding to 6843.
 	var domainServer *http.Server
 	if domainProxy != nil {
 		domainServer = &http.Server{
@@ -587,7 +604,7 @@ func main() {
 			Handler: domainProxy.Handler(),
 		}
 		go func() {
-			logger.Info("domain proxy listening", "addr", cfg.Domain.ListenAddr, "base_domain", cfg.Domain.BaseDomain)
+			logger.Info("domain proxy listening", "addr", cfg.Domain.ListenAddr)
 			if err := domainServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				logger.Error("domain proxy failed", "error", err)
 			}
@@ -597,17 +614,17 @@ func main() {
 	// ── Start embedded DNS server ───────────────────────────
 	var dnsServer *lokadns.Server
 	if cfg.Domain.DNSEnabled && cfg.Domain.DNSAddr != "" {
-		dnsServer = lokadns.NewServer(cfg.Domain.BaseDomain, "127.0.0.1", cfg.Domain.DNSAddr)
+		dnsServer = lokadns.NewServer(cfg.Domain.DNSDomain, "127.0.0.1", cfg.Domain.DNSAddr)
 		if err := dnsServer.Start(); err != nil {
 			logger.Error("DNS server failed to start", "error", err)
 		} else {
-			logger.Info("DNS server listening", "addr", cfg.Domain.DNSAddr, "domain", cfg.Domain.BaseDomain)
+			logger.Info("DNS server listening", "addr", cfg.Domain.DNSAddr, "domain", cfg.Domain.DNSDomain)
 			defer dnsServer.Stop()
 		}
 	}
 	// Wire DNS toggler into the API server for runtime enable/disable.
 	srv.SetDNSToggler(&dnsToggleAdapter{
-		domain: cfg.Domain.BaseDomain,
+		domain: cfg.Domain.DNSDomain,
 		addr:   cfg.Domain.DNSAddr,
 		logger: logger,
 		server: &dnsServer,

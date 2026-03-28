@@ -1,11 +1,11 @@
 ---
 title: Sessions
-description: 1 session = 1 Firecracker microVM
+description: 1 session = 1 microVM
 ---
 
 # Sessions
 
-A session is a single Firecracker microVM. It provides an isolated Linux environment with its own filesystem, network, and process tree.
+A session is a single microVM. On macOS it runs via the Apple Virtualization Framework; on Linux via Cloud Hypervisor with KVM. It provides an isolated Linux environment with its own filesystem, network, and process tree.
 
 ## Lifecycle
 
@@ -22,12 +22,10 @@ Every session moves through these states:
 | `terminated` | VM is destroyed; resources are freed |
 
 ```
-creating → provisioning → running ⇄ idle ⇄ paused → terminating → terminated
+creating --> provisioning --> running <--> idle <--> paused --> terminating --> terminated
 ```
 
 ## Create a session
-
-
 
 ```python
 from loka import LokaClient
@@ -39,7 +37,6 @@ session = client.create_session(
 )
 ```
 
-
 ```typescript
 import { LokaClient } from '@vypr-ai/loka-sdk';
 
@@ -50,12 +47,22 @@ const session = await loka.createSession({
 });
 ```
 
+## Shell
+
+Open a full interactive PTY shell into any session:
+
+```bash
+loka shell <id>                           # Default: /bin/bash
+loka shell <id> --shell /bin/sh           # Custom shell
+loka shell <id> --workdir /workspace      # With working directory
+loka shell                                # Auto-select most recent session
+```
+
+The shell supports tab completion, arrow keys, Ctrl-C, window resize, and all standard terminal features. Uses gRPC bidirectional streaming for real-time interaction.
 
 ## Pause and resume
 
 Pausing suspends the VM and writes memory to disk. Resuming restores it in milliseconds.
-
-
 
 ```python
 client.pause_session(session.id)
@@ -63,34 +70,25 @@ client.pause_session(session.id)
 client.resume_session(session.id)
 ```
 
-
 ```typescript
 await loka.pauseSession(session.id);
 // ... later
 await loka.resumeSession(session.id);
 ```
 
-
 ## Destroy a session
-
-
 
 ```python
 client.destroy_session(session.id)
 ```
 
-
 ```typescript
 await loka.destroySession(session.id);
 ```
 
-
-
 ## Port forwarding
 
 Expose VM ports on your local machine. Ports can be declared at session creation or added on-demand to a running session.
-
-
 
 ```python
 # Declare ports at creation
@@ -103,7 +101,6 @@ session = client.create_session(
 client.port_forward(session.id, 8080, 5000)
 ```
 
-
 ```typescript
 // Declare ports at creation
 const session = await loka.createSession({
@@ -114,8 +111,6 @@ const session = await loka.createSession({
 // Add a port forward to a running session
 await session.portForward(8080, 5000);
 ```
-
-
 
 CLI equivalent:
 
@@ -138,33 +133,20 @@ loka session mount <id> ~/data /data --read-only
 
 Synchronise data between a VM mount path and its backing cloud storage bucket.
 
-
-
 ```python
 client.sync_mount(session.id, "/data", direction="push")
 ```
-
 
 ```typescript
 await loka.syncMount(session.id, { mount_path: '/data', direction: 'push' });
 ```
 
-
-
 CLI equivalent:
 
 ```bash
-loka session sync <id> /data --direction push   # VM → bucket
-loka session sync <id> /data --direction pull   # bucket → VM
+loka session sync <id> /data --direction push   # VM --> bucket
+loka session sync <id> /data --direction pull   # bucket --> VM
 ```
-
-## Interactive Shell
-
-```bash
-loka shell <id>
-```
-
-Opens a full PTY: tab completion, arrow keys, Ctrl-C, resize. Uses gRPC bidirectional streaming.
 
 ## Idle / Auto-wake
 
@@ -178,20 +160,22 @@ Set `--idle-timeout 300` at create time for automatic idling after 5 min of inac
 
 ## Domain Exposure
 
+Expose a session port as a `.loka` subdomain:
+
 ```bash
 loka session expose <id> my-app --port 5000
-# Access at: https://my-app.loka.example.com
+# Access at: http://my-app.loka (with DNS enabled)
 loka session unexpose <id> my-app
 loka domains
 ```
+
+Requires `loka dns enable` for local `.loka` domain resolution.
 
 ## Artifacts
 
 Artifacts are files that have changed relative to the base image. They let you retrieve outputs (generated files, logs, trained models, etc.) from a session without needing a storage mount.
 
 When a checkpoint is created, its artifact list is frozen at that point in time. You can list or download artifacts for the current session state or for any checkpoint.
-
-
 
 ```python
 # List changed files
@@ -207,7 +191,6 @@ data = client.download_artifact(session.id, "/workspace/output.csv")
 client.download_artifacts(session.id, "./output/")
 ```
 
-
 ```typescript
 // List changed files
 const artifacts = await loka.listArtifacts(session.id);
@@ -218,8 +201,6 @@ const artifacts = await loka.listArtifacts(session.id, { checkpoint: cp.id });
 // Download a single file
 const data = await loka.downloadArtifact(session.id, '/workspace/output.csv');
 ```
-
-
 
 CLI equivalent:
 
@@ -242,7 +223,10 @@ Each session runs in a mode that controls what commands can do.
 | `commit` | Full access | Allowed | Deploy, push, write anywhere |
 | `ask` | Read-write | Allowed | Like execute but every command needs approval |
 
-See [Execution Modes](/concepts/modes.md) for details.
+Change the mode of a running session:
+
+```bash
+loka session mode <id> ask
+```
 
 ## Next steps
-

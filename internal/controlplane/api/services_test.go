@@ -245,8 +245,8 @@ func TestServiceRoutes(t *testing.T) {
 
 	// POST: add a route.
 	addPayload := map[string]any{
-		"subdomain": "myapp",
-		"port":      8080,
+		"domain": "myapp",
+		"port":   8080,
 	}
 	rec := ts.doRequest(t, http.MethodPost, svcURL+"/routes", addPayload, nil)
 	if rec.Code != http.StatusCreated {
@@ -258,8 +258,9 @@ func TestServiceRoutes(t *testing.T) {
 	if len(svcWithRoute.Routes) != 1 {
 		t.Fatalf("expected 1 route, got %d", len(svcWithRoute.Routes))
 	}
-	if svcWithRoute.Routes[0].Subdomain != "myapp" {
-		t.Errorf("expected subdomain myapp, got %q", svcWithRoute.Routes[0].Subdomain)
+	// Bare name "myapp" should be auto-expanded to "myapp.loka".
+	if svcWithRoute.Routes[0].Domain != "myapp.loka" {
+		t.Errorf("expected domain myapp.loka, got %q", svcWithRoute.Routes[0].Domain)
 	}
 
 	// GET: list routes.
@@ -275,8 +276,8 @@ func TestServiceRoutes(t *testing.T) {
 		t.Fatalf("expected 1 route in list, got %d", len(routeBody.Routes))
 	}
 
-	// DELETE: remove the route.
-	rec3 := ts.doRequest(t, http.MethodDelete, svcURL+"/routes/myapp", nil, nil)
+	// DELETE: remove the route (use expanded domain name).
+	rec3 := ts.doRequest(t, http.MethodDelete, svcURL+"/routes/myapp.loka", nil, nil)
 	if rec3.Code != http.StatusOK {
 		t.Fatalf("remove route: expected 200, got %d: %s", rec3.Code, rec3.Body.String())
 	}

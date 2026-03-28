@@ -14,6 +14,7 @@ import (
 	"github.com/vyprai/loka/internal/objstore"
 	"github.com/vyprai/loka/internal/store"
 	"github.com/vyprai/loka/internal/worker"
+	"github.com/vyprai/loka/internal/worker/vm"
 	"github.com/vyprai/loka/pkg/lokavm"
 )
 
@@ -345,6 +346,37 @@ func (lw *LocalWorker) handleCommand(ctx context.Context, cmd cpworker.WorkerCom
 		} else {
 			lw.logger.Debug("service logs retrieved", "service", serviceID, "stdout_lines", len(result.Stdout), "stderr_lines", len(result.Stderr))
 		}
+
+	case "shell_start":
+		data := cmd.Data.(cpworker.ShellStartData)
+		lw.wg.Add(1)
+		go func() {
+			defer lw.wg.Done()
+			// Bridge cpworker.ShellFrame channels to vm.ShellFrame channels.
+			vmInput := make(chan vm.ShellFrame, 64)
+			vmOutput := make(chan vm.ShellFrame, 64)
+
+			// Translate CP input → VM input.
+			go func() {
+				defer close(vmInput)
+				for f := range data.Relay.Input {
+					vmInput <- vm.ShellFrame{Type: f.Type, Data: f.Data}
+				}
+			}()
+
+			// Translate VM output → CP output.
+			go func() {
+				for f := range vmOutput {
+					data.Relay.Output <- cpworker.ShellFrame{Type: f.Type, Data: f.Data}
+				}
+				close(data.Relay.Output)
+			}()
+
+			// Start shell — blocks until shell exits.
+			// Pass the relay's ErrCh directly so the CP gets notified immediately.
+			lw.agent.StartShell(data.SessionID, data.Command, data.Rows, data.Cols,
+				data.Workdir, data.Env, vmInput, vmOutput, data.Relay.ErrCh)
+		}()
 
 	default:
 		lw.logger.Warn("unknown command type", "type", cmd.Type)

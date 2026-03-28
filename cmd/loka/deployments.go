@@ -104,7 +104,7 @@ func (s *DeploymentStore) SetActive(name string) error {
 }
 
 // activeEndpoint returns the endpoint of the active deployment,
-// falling back to the --server flag.
+// falling back to the --space flag.
 func activeEndpoint() string {
 	store, err := loadDeployments()
 	if err != nil {

@@ -422,22 +422,25 @@ func newSessionExposeCmd() *cobra.Command {
 	var port int
 
 	cmd := &cobra.Command{
-		Use:   "expose <session-id> <subdomain>",
-		Short: "Expose a session port via subdomain",
-		Long: `Map a subdomain to a port inside a session, making it accessible via HTTP.
+		Use:   "expose <session-id> <domain>",
+		Short: "Expose a session port via domain",
+		Long: `Map a domain to a port inside a session, making it accessible via HTTP.
 
 The control plane acts as a reverse proxy:
-  <subdomain>.<base-domain> → session VM port
+  <domain> → session VM port
 
 Examples:
   loka session expose <id> my-app --port 5000
-  loka session expose <id> api --port 8080
-
-Access at: https://my-app.loka.example.com`,
+  loka session expose <id> my-app.loka --port 5000
+  loka session expose <id> api.example.com --port 8080`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionID := args[0]
-			subdomain := args[1]
+			domain := args[1]
+			// Auto-append .loka TLD for bare names.
+			if !strings.Contains(domain, ".") {
+				domain = domain + ".loka"
+			}
 
 			if port <= 0 {
 				return fmt.Errorf("--port is required")
@@ -445,12 +448,12 @@ Access at: https://my-app.loka.example.com`,
 
 			client := newClient()
 			var resp struct {
-				Subdomain string `json:"subdomain"`
-				URL       string `json:"url"`
-				Port      int    `json:"port"`
+				Domain string `json:"domain"`
+				URL    string `json:"url"`
+				Port   int    `json:"port"`
 			}
 			err := client.Raw(cmd.Context(), "POST", "/api/v1/sessions/"+sessionID+"/expose", map[string]any{
-				"subdomain":   subdomain,
+				"domain":      domain,
 				"remote_port": port,
 			}, &resp)
 			if err != nil {
@@ -468,18 +471,18 @@ Access at: https://my-app.loka.example.com`,
 
 func newSessionUnexposeCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "unexpose <session-id> <subdomain>",
-		Short: "Remove a subdomain exposure",
+		Use:   "unexpose <session-id> <domain>",
+		Short: "Remove a domain exposure",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			sessionID := args[0]
-			subdomain := args[1]
+			domain := args[1]
 
 			client := newClient()
-			if err := client.Raw(cmd.Context(), "DELETE", "/api/v1/sessions/"+sessionID+"/expose/"+subdomain, nil, nil); err != nil {
+			if err := client.Raw(cmd.Context(), "DELETE", "/api/v1/sessions/"+sessionID+"/expose/"+domain, nil, nil); err != nil {
 				return err
 			}
-			fmt.Printf("Removed: %s\n", subdomain)
+			fmt.Printf("Removed: %s\n", domain)
 			return nil
 		},
 	}
@@ -524,13 +527,12 @@ func newDomainsCmd() *cobra.Command {
 			client := newClient()
 			var resp struct {
 				Routes []struct {
-					Subdomain  string `json:"subdomain"`
+					Domain     string `json:"domain"`
 					SessionID  string `json:"session_id"`
 					ServiceID  string `json:"service_id"`
 					RemotePort int    `json:"remote_port"`
 					Type       string `json:"type"`
 				} `json:"routes"`
-				BaseDomain string `json:"base_domain"`
 			}
 			if err := client.Raw(cmd.Context(), "GET", "/api/v1/domains", nil, &resp); err != nil {
 				return err
@@ -569,7 +571,7 @@ func newDomainsCmd() *cobra.Command {
 			}
 
 			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "SUBDOMAIN\tTARGET\tPORT\tURL")
+			fmt.Fprintln(w, "DOMAIN\tTARGET\tPORT")
 			for _, r := range resp.Routes {
 				targetID := r.SessionID
 				if r.ServiceID != "" {
@@ -579,8 +581,8 @@ func newDomainsCmd() *cobra.Command {
 				if name, ok := nameCache[targetID]; ok {
 					target = name
 				}
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s.%s\n",
-					r.Subdomain, target, r.RemotePort, r.Subdomain, resp.BaseDomain)
+				fmt.Fprintf(w, "%s\t%s\t%d\n",
+					r.Domain, target, r.RemotePort)
 			}
 			w.Flush()
 			return nil

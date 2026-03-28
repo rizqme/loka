@@ -13,43 +13,158 @@ loka [command] [flags]
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--server, -s` | active deployment | Control plane REST endpoint (e.g. `http://host:6840`) |
+| `--space, -s` | active space | Control plane endpoint (e.g. `http://host:6840`) |
 | `--token, -t` | | Auth token |
 | `--output, -o` | `table` | Output: `table`, `json` |
 
-The CLI defaults to **gRPC** (port 6841) for all control-plane communication and falls back to REST (port 6840) when gRPC is unavailable. The `--server` flag (and `loka connect`) takes the REST endpoint URL; the CLI automatically derives the gRPC address from the same host on port 6841.
+The CLI defaults to **gRPC** (port 6841) for all control-plane communication and falls back to REST (port 6840) when gRPC is unavailable. The `--space` flag (and `loka connect`) takes the REST endpoint URL; the CLI automatically derives the gRPC address from the same host on port 6841.
 
-## Servers
+## Deploy
+
+Deploy applications from source, Docker images, or Docker Compose files.
 
 ```bash
-loka deploy local --name dev            # Start locally (role: all — CP + embedded worker in one process)
-loka deploy local --name dev -f         # Foreground
-loka deploy aws --name prod --region us-east-1 --workers 3
-loka deploy gcp --name staging --project my-proj --workers 2
-loka connect http://10.0.0.1:6840 --name custom
+# Deploy a Docker image directly
+loka deploy nginx:latest --name my-app
+loka deploy postgres:16 --name db --port 5432
 
-loka list                               # List all servers (* = active)
-loka use prod                           # Switch active server
-loka deploy rename staging qa           # Rename
-loka deploy status                      # Status of active server
-loka deploy status prod                 # Status of specific server
-loka deploy down                        # Stop active
-loka deploy down dev                    # Stop specific
-loka deploy destroy prod                # Remove permanently
-loka deploy export                      # Export active server as YAML
-loka deploy export prod prod.yml        # Export specific server to file
-loka deploy vm --name prod --cp 10.0.0.1 --worker 10.0.0.2
-loka deploy azure --name eu --region westeurope --workers 2
-loka deploy do --name nyc --region nyc1 --workers 2
-loka deploy ovh --name fra --region gra --workers 2
-loka current                              # Show active server
+# Deploy from source (current directory)
+loka deploy . --name my-api
+
+# Deploy a Docker Compose project
+loka deploy --compose docker-compose.yml
+
+# Deploy a multi-component app (loka.yaml)
+loka deploy --config loka.yaml
+
+# Redeploy with updated image or source
+loka deploy nginx:latest --name my-app --force
 ```
 
-Servers are stored in `~/.loka/deployments.json`. All commands (`session`, `exec`, etc.) target the active server.
+## Shell
+
+```bash
+loka shell                                # Auto-select: active session or service instance
+loka shell <id>                           # Interactive shell into a specific session (/bin/bash)
+loka shell <id> --shell /bin/sh           # Custom shell
+loka shell <id> --workdir /workspace      # With working directory
+loka shell --service my-app               # Shell into a service instance
+```
+
+Opens a full PTY: tab completion, arrow keys, Ctrl-C, resize. Uses gRPC bidirectional streaming. When run without arguments, auto-selects the most recent active session or service instance.
+
+## Session
+
+```bash
+loka session create --image python:3.12-slim --mode execute
+loka session create --image ubuntu:22.04 --mode ask --name my-session
+loka session create --image python:3.12-slim --port 8080:5000 --port 3001:3001
+loka session create --image python:3.12-slim \
+  --mount s3://bucket@/data?access_key_id=AKIA...&secret_access_key=...
+loka session list
+loka session get <id>
+loka session destroy <id>
+loka session pause <id>
+loka session resume <id>
+loka session mode <id> ask
+
+# Idle / wake
+loka session idle <id>                    # Suspend (auto-wakes on access)
+
+# Domain exposure
+loka session expose <id> my-app --port 5000   # Expose via subdomain
+loka session unexpose <id> my-app             # Remove subdomain
+
+# Local file mounting (tunnel)
+loka session mount <id> ./project /workspace
+loka session mount <id> ~/data /data --read-only
+
+# Storage mount sync
+loka session sync <id> /data --direction push          # VM --> bucket
+loka session sync <id> /data --direction pull          # bucket --> VM
+loka session sync <id> /data -d push --prefix results/ --dry-run
+
+# Artifacts
+loka session artifacts <id>                              # List changed files
+loka session artifacts <id> --checkpoint <cpId>          # For a checkpoint
+loka session download <id> /workspace/output.csv         # Download single file
+loka session download <id> /workspace/output.csv ./out.csv
+loka session download <id> --all ./output/               # Download all as tar
+loka session download <id> --all ./output/ --checkpoint <cpId>
+```
+
+## Service
+
+```bash
+loka service list                          # List all services
+loka service get <name>                    # Service details (includes components)
+loka service logs <name>                   # Tail logs
+loka service logs <name> --component web   # Logs for a specific component
+loka service stop <name>                   # Stop a service
+loka service rm <name>                     # Remove a service
+loka service redeploy <name>               # Redeploy with latest config
+loka service env <name>                    # Show environment variables
+loka service env <name> --set KEY=VALUE    # Set environment variable
+```
+
+## Instance
+
+```bash
+loka instance list                         # Unified view of all running instances (sessions + services)
+loka instance rm <id>                      # Remove an instance
+```
+
+## Space
+
+```bash
+loka space list                            # List all spaces (* = active)
+loka space select prod                     # Switch active space
+loka space current                         # Show active space
+loka space down                            # Stop active space
+loka space down dev                        # Stop specific space
+loka space status                          # Status of active space
+loka space status prod                     # Status of specific space
+```
+
+Spaces are stored in `~/.loka/deployments.json`. All commands (`session`, `service`, `exec`, etc.) target the active space.
+
+## Exec
+
+```bash
+loka exec <session-id> -- echo "hello"
+loka exec <session-id> -- python3 script.py
+loka exec <session-id> --parallel --cmd "echo A" --cmd "echo B"
+```
+
+## Checkpoint
+
+```bash
+loka checkpoint create <session-id> --label "before-change"
+loka checkpoint list <session-id>
+loka checkpoint tree <session-id>
+loka checkpoint restore <session-id> <checkpoint-id>
+loka checkpoint diff <session-id> <cp-a> <cp-b>
+```
+
+## Setup
+
+Provision and configure LOKA infrastructure.
+
+```bash
+loka setup local --name dev                # Start locally (role: all -- CP + embedded worker)
+loka setup local --name dev -f             # Foreground
+loka setup aws --name prod --region us-east-1 --workers 3
+loka setup gcp --name staging --project my-proj --workers 2
+loka setup azure --name eu --region westeurope --workers 2
+loka setup do --name nyc --region nyc1 --workers 2
+loka setup ovh --name fra --region gra --workers 2
+loka setup vm --name prod --cp 10.0.0.1 --worker 10.0.0.2
+loka setup apply cluster.yml               # Declarative deployment from YAML
+```
 
 ### Declarative Deployment
 
-Use a YAML file to declare the full cluster topology. `deploy apply` creates the cluster on first run, then diffs and reconciles workers on subsequent runs (adds new nodes, removes ones no longer listed). The control plane is not re-deployed on updates.
+Use a YAML file to declare the full cluster topology. `setup apply` creates the cluster on first run, then diffs and reconciles workers on subsequent runs (adds new nodes, removes ones no longer listed). The control plane is not re-deployed on updates.
 
 ```yaml
 name: production
@@ -69,133 +184,88 @@ workers:
 ```
 
 ```bash
-loka deploy apply cluster.yml           # Create or reconcile
-loka deploy export > cluster.yml        # Export current state as YAML
-loka deploy export prod prod.yml        # Export specific server to file
+loka setup apply cluster.yml               # Create or reconcile
 ```
 
-Edit the exported file and re-apply to update workers. For a local single-node cluster:
-
-```yaml
-name: dev
-provider: local
-```
+## DNS
 
 ```bash
-loka deploy apply dev.yml
-```
-
-## Sessions
-
-```bash
-loka session create --image python:3.12-slim --mode execute
-loka session create --image ubuntu:22.04 --mode ask --name my-session
-loka session create --image python:3.12-slim --port 8080:5000 --port 3001:3001
-loka session create --image python:3.12-slim \
-  --mount s3://bucket@/data?access_key_id=AKIA...&secret_access_key=...
-loka session list
-loka session get <id>
-loka session destroy <id>
-loka session pause <id>
-loka session resume <id>
-loka session mode <id> ask
-
-# Port forwarding
-loka session port-forward <id> 8080:5000
-loka session port-forward <id> 8080:5000 3001:3001
-loka session ports <id>                    # List port mappings
-
-# Local file mounting (tunnel)
-loka session mount <id> ./project /workspace
-loka session mount <id> ~/data /data --read-only
-
-# Storage mount sync
-loka session sync <id> /data --direction push          # VM → bucket
-loka session sync <id> /data --direction pull          # bucket → VM
-loka session sync <id> /data -d push --prefix results/ --dry-run
-
-# Idle / wake
-loka session idle <id>                    # Suspend (auto-wakes on access)
-
-# Domain exposure
-loka session expose <id> my-app --port 5000   # Expose via subdomain
-loka session unexpose <id> my-app             # Remove subdomain
-```
-
-## Artifacts
-
-```bash
-loka session artifacts <id>                              # List changed files
-loka session artifacts <id> --checkpoint <cpId>          # For a checkpoint
-loka session download <id> /workspace/output.csv         # Download single file
-loka session download <id> /workspace/output.csv ./out.csv
-loka session download <id> --all ./output/               # Download all as tar
-loka session download <id> --all ./output/ --checkpoint <cpId>
-```
-
-## Commands
-
-```bash
-loka exec <session-id> -- echo "hello"
-loka exec <session-id> -- python3 script.py
-loka exec <session-id> --parallel --cmd "echo A" --cmd "echo B"
-```
-
-## Shell
-
-```bash
-loka shell <id>                           # Interactive shell (/bin/bash)
-loka shell <id> --shell /bin/sh           # Custom shell
-loka shell <id> --workdir /workspace      # With working directory
-```
-
-## Checkpoints
-
-```bash
-loka checkpoint create <session-id> --label "before-change"
-loka checkpoint list <session-id>
-loka checkpoint tree <session-id>
-loka checkpoint restore <session-id> <checkpoint-id>
-loka checkpoint diff <session-id> <cp-a> <cp-b>
-```
-
-## Workers
-
-```bash
-loka worker list                         # List workers
-loka worker get <id>                     # Worker details
-loka worker add 10.0.0.5                # Add a worker via SSH
-loka worker add 10.0.0.5 --label gpu=true
-loka worker remove 10.0.0.5             # Drain, stop, and remove a worker
-loka worker scale                        # Show current worker count
-loka worker scale 5                      # Scale to 5 workers (cloud providers)
-loka worker scale 0                      # Remove all workers
-loka worker drain <id>
-loka worker undrain <id>
-loka worker deregister <id>              # Deregister by worker ID (API only)
-loka worker label <id> gpu=true
-loka worker top                          # Resource usage across workers
+loka dns enable                            # Enable .loka local DNS resolution
+loka dns disable                           # Disable .loka DNS
+loka dns status                            # Show DNS configuration status
 ```
 
 ## Domains
 
 ```bash
-loka domains                              # List all domain routes
+loka domains                               # List all domain routes
+loka domain add my-app --target service:web --port 8080
+loka domain rm my-app
 ```
 
-## Images
+## Volume
 
 ```bash
-loka image pull ubuntu:22.04
-loka image list
+loka volume list                           # List all volumes
+loka volume create my-data --size 10G      # Create a volume
+loka volume inspect my-data                # Volume details
+loka volume delete my-data                 # Delete a volume
 ```
 
-## Tokens
+## Worker
 
 ```bash
-loka token create --name my-server --expires 86400
+loka worker list                           # List workers
+loka worker add 10.0.0.5                   # Add a worker via SSH
+loka worker add 10.0.0.5 --label gpu=true
+loka worker remove 10.0.0.5               # Drain, stop, and remove a worker
+loka worker drain <id>
+```
+
+## Token
+
+```bash
+loka token create --name my-token --expires 86400
 loka token list
 loka token revoke <id>
+```
+
+## Secret
+
+```bash
+loka secret set MY_KEY my-value            # Set a secret
+loka secret list                           # List secrets
+loka secret remove MY_KEY                  # Remove a secret
+```
+
+## Image
+
+```bash
+loka image pull ubuntu:22.04               # Pull image (no Docker daemon needed)
+loka image list                            # List pulled images
+loka image inspect ubuntu:22.04            # Image details
+loka image delete ubuntu:22.04             # Remove a pulled image
+```
+
+## Recipe
+
+```bash
+loka recipe list                           # List available recipes
+loka recipe add my-recipe ./recipe.yaml    # Add a recipe
+loka recipe remove my-recipe               # Remove a recipe
+```
+
+## Connect
+
+```bash
+loka connect http://10.0.0.1:6840 --name custom   # Connect to a remote space
+```
+
+## Admin
+
+```bash
+loka admin gc                              # Run garbage collection
+loka admin retention                       # Show/set retention policies
 ```
 
 ## Other

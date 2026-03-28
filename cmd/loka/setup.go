@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
-	"text/tabwriter"
+
 	"time"
 
 	"github.com/spf13/cobra"
@@ -42,9 +42,6 @@ func newSetupCmd() *cobra.Command {
 		newDeployVMCmd(),
 		newDeployLocalCmd(),
 		newDeployRenameCmd(),
-		newDeployDownCmd(),
-		newDeployStatusCmd(),
-		newDeployDestroyCmd(),
 	)
 	return cmd
 }
@@ -133,11 +130,16 @@ func deployLocalLinux(name string, foreground bool) error {
 	if err := p.Start(); err != nil { return err }
 	fmt.Printf("LOKA %q started (pid %d)\n", name, p.Process.Pid)
 	fmt.Printf("  Endpoint: http://localhost:6840\n")
-	fmt.Printf("  Stop:     loka setup down\n")
+	fmt.Printf("  Stop:     loka space down\n")
 	return nil
 }
 
 func deployLocalMacOS(name string, foreground bool) error {
+	// Refuse to start if lokad is already running.
+	if out, _ := exec.Command("pgrep", "-x", "lokad").Output(); len(out) > 0 {
+		return fmt.Errorf("lokad is already running. Stop it first: loka space down")
+	}
+
 	// Find lokad binary — it embeds the Apple VZ hypervisor (lokavm library).
 	lokadPath := findLokad()
 	if lokadPath == "" {
@@ -238,7 +240,14 @@ func deployLocalMacOS(name string, foreground bool) error {
 	store.Active = name
 	saveDeployments(store)
 
-	fmt.Printf("LOKA started\n  Endpoint: https://localhost:6840\n  Stop: loka setup down\n")
+	fmt.Printf("LOKA started\n  Endpoint: https://localhost:6840\n  Stop: loka space down\n")
+
+	// Hint about DNS if not enabled.
+	if !isDNSEnabled() {
+		fmt.Println()
+		fmt.Printf("  %sTip:%s Enable .loka domains: %sloka dns enable%s\n", dim, reset, bold, reset)
+	}
+
 	return nil
 }
 
@@ -252,9 +261,9 @@ func findLokad() string {
 		}
 	}
 	candidates := []string{
+		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "lokad"),
 		"lokad",
 		"/usr/local/bin/lokad",
-		filepath.Join(os.Getenv("HOME"), ".loka", "bin", "lokad"),
 	}
 	for _, p := range candidates {
 		if path, err := exec.LookPath(p); err == nil {
@@ -264,26 +273,6 @@ func findLokad() string {
 	return ""
 }
 
-func newListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use: "list", Short: "List servers", Aliases: []string{"ls"},
-		RunE: func(cmd *cobra.Command, args []string) error {
-			store, _ := loadDeployments()
-			if len(store.Deployments) == 0 {
-				fmt.Println("No servers. Set one up: loka setup local --name dev")
-				return nil
-			}
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "  NAME\tPROVIDER\tENDPOINT\tWORKERS\tSTATUS\tCREATED")
-			for _, d := range store.Deployments {
-				a := " "; if d.Name == store.Active { a = "*" }
-				fmt.Fprintf(w, "%s %s\t%s\t%s\t%d\t%s\t%s\n", a, d.Name, d.Provider, d.Endpoint, d.Workers, d.Status, d.CreatedAt.Format("2006-01-02"))
-			}
-			w.Flush()
-			return nil
-		},
-	}
-}
 
 
 func newDeployRenameCmd() *cobra.Command {
@@ -311,27 +300,20 @@ func newDeployDownCmd() *cobra.Command {
 			d := store.Get(name)
 			if d == nil { return fmt.Errorf("server %q not found", name) }
 			if d.Provider == "local" {
-				rt := ""
-				if d.Meta != nil {
-					rt = d.Meta["runtime"]
-				}
-				if rt == "lokad" || rt == "lokavm" || rt == "vm" {
-					// Kill lokad process.
-					if pidStr, ok := d.Meta["pid"]; ok && pidStr != "" {
-						exec.Command("kill", pidStr).Run()
-					} else {
-						exec.Command("pkill", "-f", "lokad").Run()
+				// Kill lokad process and wait for it to exit.
+				exec.Command("pkill", "-x", "lokad").Run()
+				for i := 0; i < 10; i++ {
+					if out, _ := exec.Command("pgrep", "-x", "lokad").Output(); len(out) == 0 {
+						break
 					}
-					fmt.Printf("LOKA %q stopped\n", name)
-				} else {
-					out, _ := exec.Command("pgrep", "-f", "lokad").Output()
-					if len(out) > 0 {
-						exec.Command("kill", strings.TrimSpace(string(out))).Run()
-						fmt.Printf("LOKA %q stopped\n", name)
-					} else {
-						fmt.Printf("%q is not running\n", name)
-					}
+					time.Sleep(500 * time.Millisecond)
 				}
+				// Force kill if still alive.
+				if out, _ := exec.Command("pgrep", "-x", "lokad").Output(); len(out) > 0 {
+					exec.Command("pkill", "-9", "-x", "lokad").Run()
+					time.Sleep(500 * time.Millisecond)
+				}
+				fmt.Printf("LOKA %q stopped\n", name)
 			}
 			d.Status = "stopped"; saveDeployments(store)
 			return nil
@@ -348,7 +330,7 @@ func newDeployStatusCmd() *cobra.Command {
 			d := store.Get(name)
 			if d == nil { return fmt.Errorf("server %q not found", name) }
 			fmt.Printf("Name:     %s\n", d.Name)
-			fmt.Printf("Provider: %s\n", d.Provider)
+			fmt.Printf("Space:    %s\n", d.Provider)
 			fmt.Printf("Endpoint: %s\n", d.Endpoint)
 			fmt.Printf("Workers:  %d\n", d.Workers)
 			fmt.Printf("Status:   %s\n", d.Status)

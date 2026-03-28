@@ -9,8 +9,8 @@ func TestNewShellCmd_CreatesValidCommand(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("newShellCmd returned nil")
 	}
-	if cmd.Use != "shell <session-id>" {
-		t.Errorf("Use = %q, want %q", cmd.Use, "shell <session-id>")
+	if cmd.Use != "shell [session-id]" {
+		t.Errorf("Use = %q, want %q", cmd.Use, "shell [session-id]")
 	}
 	if cmd.Short == "" {
 		t.Error("Short description should not be empty")
@@ -50,13 +50,13 @@ func TestNewShellCmd_DefaultShellIsBash(t *testing.T) {
 	}
 }
 
-func TestNewShellCmd_RequiresExactlyOneArg(t *testing.T) {
+func TestNewShellCmd_AcceptsZeroOrOneArg(t *testing.T) {
 	cmd := newShellCmd()
 
-	// Zero args should fail validation.
+	// Zero args should pass validation (auto-resolve).
 	err := cmd.Args(cmd, []string{})
-	if err == nil {
-		t.Error("expected error with 0 args")
+	if err != nil {
+		t.Errorf("expected no error with 0 args, got: %v", err)
 	}
 
 	// One arg should pass validation.

@@ -1,0 +1,91 @@
+---
+title: Domains & DNS
+description: Route traffic to services with .loka domains
+---
+
+# Domains & DNS
+
+LOKA includes a built-in DNS server and domain proxy that routes HTTP traffic to your services and sessions.
+
+## Enable DNS
+
+Enable `.loka` local domain resolution:
+
+```bash
+loka dns enable
+```
+
+This configures your system resolver to forward `.loka` domain queries to the LOKA DNS server. Once enabled, all services are automatically accessible at `http://<service-name>.loka`.
+
+### Check DNS status
+
+```bash
+loka dns status
+```
+
+### Disable DNS
+
+```bash
+loka dns disable
+```
+
+## Automatic domains
+
+Every deployed service automatically gets a `.loka` domain:
+
+```bash
+loka deploy nginx:latest --name my-app
+# Accessible at: http://my-app.loka
+
+loka deploy postgres:16 --name db
+# Accessible at: http://db.loka
+```
+
+Multi-component services get domains for each component:
+
+```bash
+loka deploy --config loka.yaml   # Service "my-app" with components "web" and "api"
+# http://my-app.loka             (routes to default component)
+# http://web.my-app.loka         (routes to web component)
+# http://api.my-app.loka         (routes to api component)
+```
+
+## Session domain exposure
+
+Expose a port from a session as a domain:
+
+```bash
+loka session expose <id> my-app --port 5000
+# Accessible at: http://my-app.loka
+
+loka session unexpose <id> my-app
+```
+
+## Domain management
+
+```bash
+loka domains                               # List all domain routes
+loka domain add my-app --target service:web --port 8080
+loka domain rm my-app
+```
+
+## Domain proxy
+
+The domain proxy runs as part of the control plane. It accepts incoming HTTP requests and routes them to the correct service instance or session based on the `Host` header.
+
+The proxy handles:
+
+- Routing by service name and component
+- Port mapping (external port 80 to the service's configured port)
+- Auto-wake of idle sessions on incoming requests
+- Health checking and retry on unhealthy backends
+
+## HTTPS
+
+For local development, services are accessible over HTTP at `http://<name>.loka`. For production deployments, configure a reverse proxy (nginx, Caddy, etc.) in front of LOKA to terminate TLS.
+
+## Next steps
+
+- [Deploy Locally](/deploy-local) -- set up a local space with DNS
+- [Services](/services) -- managing deployed services
+- [Sessions](/sessions) -- session domain exposure
