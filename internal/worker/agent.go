@@ -110,7 +110,7 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 		return nil, fmt.Errorf("init git cache: %w", err)
 	}
 
-	return &Agent{
+	agent := &Agent{
 		id:            uuid.New().String(),
 		hostname:      hostname,
 		provider:      provider,
@@ -125,7 +125,51 @@ func NewAgent(provider string, labels map[string]string, dataDir string, objStor
 		gitCache:      gc,
 		syncAgent:     volsync.NewAgent(dataDir, objStore, logger),
 		warmCache:     make(map[string]*warmSnapshot),
-	}, nil
+	}
+
+	// Start session reaper: removes stale sessions where VM no longer exists.
+	go agent.sessionReaper()
+
+	return agent, nil
+}
+
+// sessionReaper periodically removes stale session entries where the VM is gone.
+func (a *Agent) sessionReaper() {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for range ticker.C {
+		if a.hypervisor == nil {
+			continue
+		}
+		vms, err := a.hypervisor.ListVMs()
+		if err != nil {
+			continue
+		}
+		activeVMs := make(map[string]bool)
+		for _, v := range vms {
+			activeVMs[v.ID] = true
+		}
+
+		a.mu.Lock()
+		for id := range a.sessions {
+			if !activeVMs[id] {
+				a.logger.Warn("reaping stale session (VM gone)", "session", id)
+				delete(a.sessions, id)
+			}
+		}
+		// Warm cache eviction: keep max 10 entries.
+		const maxWarmCache = 10
+		if len(a.warmCache) > maxWarmCache {
+			// Evict oldest entries.
+			for k := range a.warmCache {
+				if len(a.warmCache) <= maxWarmCache {
+					break
+				}
+				delete(a.warmCache, k)
+			}
+		}
+		a.mu.Unlock()
+	}
 }
 
 // ID returns the agent's unique identifier.
@@ -1338,10 +1382,14 @@ func (a *Agent) StartShell(sessionID, command string, rows, cols uint16, workdir
 	// Bridge relay channels ↔ framed vsock I/O.
 	var wg sync.WaitGroup
 
+	// done is closed when the shell exits (vsock read returns error or exit frame).
+	done := make(chan struct{})
+
 	// Goroutine 1: vsock → outputCh (PTY output and exit).
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
+		defer close(done)
 		for {
 			frame, err := vm.ReadFrame(conn)
 			if err != nil {
@@ -1359,11 +1407,20 @@ func (a *Agent) StartShell(sessionID, command string, rows, cols uint16, workdir
 	}()
 
 	// Goroutine 2: inputCh → vsock (stdin data and resize).
+	// Uses done channel to avoid hanging if inputCh is never closed.
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for frame := range inputCh {
-			if err := vm.WriteFrame(conn, frame); err != nil {
+		for {
+			select {
+			case frame, ok := <-inputCh:
+				if !ok {
+					return
+				}
+				if err := vm.WriteFrame(conn, frame); err != nil {
+					return
+				}
+			case <-done:
 				return
 			}
 		}

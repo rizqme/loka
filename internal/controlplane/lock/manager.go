@@ -17,6 +17,7 @@ type Manager struct {
 
 	// Background reaper for expired locks.
 	done chan struct{}
+	wg   sync.WaitGroup
 }
 
 // FileLock represents an active file lock.
@@ -35,13 +36,18 @@ func NewManager() *Manager {
 		locks: make(map[string]*FileLock),
 		done:  make(chan struct{}),
 	}
-	go m.reapExpired()
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		m.reapExpired()
+	}()
 	return m
 }
 
-// Stop shuts down the lock manager.
+// Stop shuts down the lock manager and waits for the reaper to finish.
 func (m *Manager) Stop() {
 	close(m.done)
+	m.wg.Wait()
 }
 
 // Acquire attempts to acquire a lock on a file in a volume.

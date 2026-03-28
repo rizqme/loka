@@ -182,8 +182,17 @@ func (m *Manager) ExtractBundle(ctx context.Context, volName, bundleKey string) 
 	defer gzReader.Close()
 
 	// Extract tar entries to the readonly bundles directory.
+	// Clean up partial directory on error.
 	volDir := m.BundlePath(volName)
-	os.MkdirAll(volDir, 0o755)
+	if err := os.MkdirAll(volDir, 0o755); err != nil {
+		return fmt.Errorf("create bundle dir: %w", err)
+	}
+	success := false
+	defer func() {
+		if !success {
+			os.RemoveAll(volDir)
+		}
+	}()
 
 	tarReader := tar.NewReader(gzReader)
 	fileCount := 0
@@ -218,6 +227,7 @@ func (m *Manager) ExtractBundle(ctx context.Context, volName, bundleKey string) 
 		}
 	}
 
+	success = true
 	m.logger.Info("bundle extracted into volume",
 		"volume", volName,
 		"bundle_key", bundleKey,

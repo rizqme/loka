@@ -546,6 +546,7 @@ func main() {
 			api.DomainProxyOpts{ServiceManager: svcMgr},
 		)
 		svcMgr.SetDomainProxy(domainProxy)
+		domainProxy.StartRouteReaper()
 
 		// When a domain route is added, regenerate the TLS cert to include it.
 		tlsDir := cfg.DataDir + "/tls"

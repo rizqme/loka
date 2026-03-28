@@ -95,6 +95,10 @@ func (gc *GarbageCollector) Run(ctx context.Context) {
 
 // Sweep performs one garbage collection pass.
 func (gc *GarbageCollector) Sweep(ctx context.Context) *SweepResult {
+	// Add timeout to prevent hanging on slow store operations.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+
 	start := time.Now()
 	result := &SweepResult{Timestamp: start}
 

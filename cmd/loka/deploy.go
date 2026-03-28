@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"github.com/vyprai/loka/internal/compose"
 	"github.com/vyprai/loka/internal/loka"
 	"github.com/vyprai/loka/internal/recipe"
+	"github.com/vyprai/loka/pkg/lokaapi"
 	"github.com/vyprai/loka/internal/secret"
 	"gopkg.in/yaml.v3"
 )
@@ -69,6 +71,38 @@ type lokaComponentYAML struct {
 
 	// Monorepo path reference.
 	Path string `yaml:"path,omitempty"`
+}
+
+// waitForServiceReady polls a service until it reaches running/error state.
+// Returns the final status or error.
+func waitForServiceReady(ctx context.Context, client *lokaapi.Client, serviceID string, sp *spinner) (string, error) {
+	lastMsg := ""
+	for i := 0; i < 180; i++ {
+		time.Sleep(1 * time.Second)
+		var updated struct {
+			ID            string `json:"ID"`
+			Status        string `json:"Status"`
+			Ready         bool   `json:"Ready"`
+			StatusMessage string `json:"StatusMessage"`
+		}
+		if err := client.Raw(ctx, "GET", "/api/v1/services/"+serviceID, nil, &updated); err != nil {
+			continue
+		}
+		if updated.StatusMessage != "" && updated.StatusMessage != lastMsg {
+			sp.update(updated.StatusMessage)
+			lastMsg = updated.StatusMessage
+		}
+		if updated.Ready || updated.Status == "running" {
+			sp.stop("Running")
+			return updated.Status, nil
+		}
+		if updated.Status == "error" {
+			sp.fail(updated.StatusMessage)
+			return updated.Status, fmt.Errorf("deployment failed: %s", updated.StatusMessage)
+		}
+	}
+	sp.fail("Timed out")
+	return "", fmt.Errorf("timed out waiting for service")
 }
 
 // isImageRef returns true if the argument looks like a Docker image reference

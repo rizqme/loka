@@ -81,6 +81,26 @@ func NewDomainProxy(sm *session.Manager, registry *worker.Registry, logger *slog
 	}
 }
 
+// StartRouteReaper periodically removes stale routes for sessions/services that no longer exist.
+func (p *DomainProxy) StartRouteReaper() {
+	go func() {
+		ticker := time.NewTicker(60 * time.Second)
+		defer ticker.Stop()
+		for range ticker.C {
+			p.mu.Lock()
+			for domain, route := range p.routes {
+				if route.Type == loka.DomainRouteSession && route.SessionID != "" {
+					if _, err := p.sm.Get(context.Background(), route.SessionID); err != nil {
+						p.logger.Info("reaping stale route (session gone)", "domain", domain)
+						delete(p.routes, domain)
+					}
+				}
+			}
+			p.mu.Unlock()
+		}
+	}()
+}
+
 // DomainProxyOpts holds optional configuration for the domain proxy.
 type DomainProxyOpts struct {
 	ServiceManager *service.Manager
