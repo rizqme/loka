@@ -172,7 +172,7 @@ func (m *Manager) asyncRun(task *loka.Task) {
 func (m *Manager) monitorTask(ctx context.Context, task *loka.Task) {
 	timeout := time.Duration(task.Timeout) * time.Second
 	if timeout == 0 {
-		timeout = 24 * time.Hour // Default max: 24h.
+		timeout = 1 * time.Hour // Default max: 1h.
 	}
 	deadline := time.Now().Add(timeout)
 

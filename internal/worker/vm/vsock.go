@@ -50,6 +50,11 @@ func (c *VsockClient) SocketPath() string {
 	return c.socketPath
 }
 
+// Close closes the pooled vsock connection.
+func (c *VsockClient) Close() {
+	c.closeConn()
+}
+
 // ── RPC Messages ────────────────────────────────────────
 
 // RPCRequest is sent from the worker (host) to the supervisor (guest).

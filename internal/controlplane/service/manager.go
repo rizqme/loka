@@ -231,7 +231,9 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 				rootfsPath = rp
 			}
 		} else {
-			img, pullErr := m.images.Pull(ctx, svc.ImageRef)
+			pullCtx, pullCancel := context.WithTimeout(ctx, 5*time.Minute)
+			img, pullErr := m.images.Pull(pullCtx, svc.ImageRef)
+			pullCancel()
 			if pullErr != nil {
 				m.logger.Error("image pull failed for service", "service", serviceID, "error", pullErr)
 				m.setError(ctx, serviceID, "image pull failed: "+pullErr.Error())
@@ -320,11 +322,14 @@ func (m *Manager) asyncDeploy(ctx context.Context, serviceID string, opts Deploy
 		HealthPath:          svc.HealthPath,
 	}
 
-	m.registry.SendCommand(svc.WorkerID, worker.WorkerCommand{
+	if err := m.registry.SendCommand(svc.WorkerID, worker.WorkerCommand{
 		ID:   uuid.New().String(),
 		Type: "launch_service",
 		Data: launchData,
-	})
+	}); err != nil {
+		m.setError(ctx, serviceID, fmt.Sprintf("failed to dispatch to worker: %v", err))
+		return
+	}
 
 	// 3. Wait for health check to pass (polling with timeout).
 	// Poll the store for status updates. The localworker updates the service
@@ -457,6 +462,13 @@ func (m *Manager) Destroy(ctx context.Context, id string) error {
 				m.proxy.RemoveRoute(route.Domain)
 			}
 		}
+	}
+
+	// Clean up bundle volume.
+	bundleVolName := fmt.Sprintf("bundle-%s-%s", svc.Name, svc.ID[:8])
+	if m.volumeManager != nil {
+		volPath := m.volumeManager.BundlePath(bundleVolName)
+		os.RemoveAll(volPath)
 	}
 
 	if err := m.store.Services().Delete(ctx, id); err != nil {

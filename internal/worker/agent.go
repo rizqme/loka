@@ -469,10 +469,19 @@ func (a *Agent) StopSession(sessionID string) error {
 		sess.PortForwardListener = nil
 		sess.ForwardedPort = 0
 	}
+	// Close vsock connection pool.
+	if sess.Vsock != nil {
+		sess.Vsock.Close()
+	}
+	a.mu.Unlock()
+
+	// Stop the VM before removing from sessions map to avoid orphans.
+	a.stopVM(sessionID)
+
+	a.mu.Lock()
 	delete(a.sessions, sessionID)
 	a.mu.Unlock()
 
-	a.stopVM(sessionID)
 	a.logger.Info("session stopped", "session", sessionID)
 	return nil
 }
@@ -506,12 +515,13 @@ type ExecResult struct {
 func (a *Agent) ExecCommands(ctx context.Context, sessionID, execID string, commands []loka.Command, parallel bool) *ExecResult {
 	a.mu.RLock()
 	sess, ok := a.sessions[sessionID]
+	vsock := sess.Vsock // Copy under lock to avoid use-after-free.
 	a.mu.RUnlock()
-	if !ok {
+	if !ok || vsock == nil {
 		return &ExecResult{ExecID: execID, Status: loka.ExecStatusFailed, Error: fmt.Sprintf("instance %s not found", sessionID)}
 	}
 
-	resp, err := sess.Vsock.Execute(vm.ExecRequest{Commands: commands, Parallel: parallel, ExecID: execID})
+	resp, err := vsock.Execute(vm.ExecRequest{Commands: commands, Parallel: parallel, ExecID: execID})
 	if err != nil {
 		return &ExecResult{ExecID: execID, Status: loka.ExecStatusFailed, Error: err.Error()}
 	}
